@@ -296,10 +296,16 @@ end
 ---Set the complete response text at once (non-streaming)
 ---@param text string The complete response text
 function M.set_response(text)
+  vim.notify(
+    "DEBUG response.lua: set_response called, text length=" .. tostring(text and #text or "nil"),
+    vim.log.levels.INFO
+  )
+
   stop_spinner()
   state.is_streaming = false
 
   if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    vim.notify("DEBUG response.lua: buffer invalid, returning early", vim.log.levels.INFO)
     return
   end
 

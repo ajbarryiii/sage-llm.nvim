@@ -206,12 +206,30 @@ function M.chat(messages, callback)
       ["X-Title"] = "sage-llm.nvim",
     },
     body = body,
-    callback = function(response)
+    on_error = function(err)
       if cancelled then
         return
       end
+      vim.schedule(function()
+        callback(nil, "Network error: " .. vim.inspect(err))
+      end)
+    end,
+    callback = function(response)
+      vim.notify("DEBUG api.lua: curl callback fired", vim.log.levels.INFO)
+
+      if cancelled then
+        vim.notify("DEBUG api.lua: cancelled, returning early", vim.log.levels.INFO)
+        return
+      end
+
+      vim.notify(
+        "DEBUG api.lua: response status=" .. tostring(response and response.status or "nil"),
+        vim.log.levels.INFO
+      )
 
       vim.schedule(function()
+        vim.notify("DEBUG api.lua: inside vim.schedule", vim.log.levels.INFO)
+
         if response.status ~= 200 then
           local err_msg = "API error (HTTP " .. response.status .. ")"
           if response.body then
@@ -220,19 +238,28 @@ function M.chat(messages, callback)
               err_msg = err_msg .. ": " .. (err_data.error.message or vim.inspect(err_data.error))
             end
           end
+          vim.notify("DEBUG api.lua: calling callback with error: " .. err_msg, vim.log.levels.INFO)
           callback(nil, err_msg)
           return
         end
 
         local ok, data = pcall(vim.json.decode, response.body)
+        vim.notify("DEBUG api.lua: json decode ok=" .. tostring(ok), vim.log.levels.INFO)
+
         if not ok then
           callback(nil, "Failed to parse response")
           return
         end
 
         if data.choices and data.choices[1] and data.choices[1].message then
-          callback(data.choices[1].message.content, nil)
+          local content = data.choices[1].message.content
+          vim.notify(
+            "DEBUG api.lua: content length=" .. tostring(content and #content or "nil"),
+            vim.log.levels.INFO
+          )
+          callback(content, nil)
         else
+          vim.notify("DEBUG api.lua: unexpected response format", vim.log.levels.INFO)
           callback(nil, "Unexpected response format")
         end
       end)
