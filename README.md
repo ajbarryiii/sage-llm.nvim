@@ -4,8 +4,8 @@ A Neovim plugin that lets you highlight code in visual mode and ask an LLM about
 
 ## Why?
 
-Learning a new language? Confused by compiler errors? This plugin helps you understand:
-- **Compiler errors** (especially Rust's borrow checker)
+Suppose you have a simple syntax question, or want to understand a complier error. Do you really want to open up a window to ask claude or chatgpt? Or would it be better to just have it right in neovim. `sage-llm.nvim` lets you ask all these simple queries right from neovim. It is specifically intended for: 
+- **Compiler errors** 
 - **Type errors** and warnings
 - **Syntax issues** in unfamiliar languages
 - **Code patterns** you haven't seen before
@@ -79,7 +79,7 @@ The plugin doesn't set default keymaps. Add your own:
 -- In your Neovim config
 vim.keymap.set("v", "<leader>sa", ":SageAsk<CR>", { desc = "Ask LLM about selection" })
 vim.keymap.set("v", "<leader>se", ":SageExplain<CR>", { desc = "Explain selection" })
-vim.keymap.set("v", "<leader>sf", ":SageFix<CR>", { desc = "Fix diagnostics" })
+vim.keymap.set("v", "<leader>sx", ":SageFix<CR>", { desc = "Fix diagnostics" })
 vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 ```
 
