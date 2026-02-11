@@ -7,6 +7,7 @@
 ---@field detect_dependencies boolean Whether to detect and include dependencies
 ---@field models string[] Available models for picker
 ---@field system_prompt string System prompt for the LLM
+---@field debug boolean Enable debug logging to /tmp/sage-llm-debug.log
 
 ---@class SageResponseConfig
 ---@field width number Width as fraction of editor (0-1)
@@ -41,6 +42,7 @@ M.defaults = {
   },
 
   detect_dependencies = false,
+  debug = false,
 
   models = {
     "anthropic/claude-sonnet-4-20250514",
@@ -86,6 +88,7 @@ function M.validate()
     ["input.width"] = { M.options.input.width, "number" },
     ["input.height"] = { M.options.input.height, "number" },
     detect_dependencies = { M.options.detect_dependencies, "boolean" },
+    debug = { M.options.debug, "boolean" },
     models = { M.options.models, "table" },
     system_prompt = { M.options.system_prompt, "string" },
   })

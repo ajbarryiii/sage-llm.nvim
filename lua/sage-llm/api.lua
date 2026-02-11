@@ -5,6 +5,9 @@ local M = {}
 
 -- Debug helper that works in fast event context
 local function debug_log(msg)
+  if not config.options.debug then
+    return
+  end
   local f = io.open("/tmp/sage-llm-debug.log", "a")
   if f then
     f:write(os.date("%H:%M:%S") .. " " .. msg .. "\n")
