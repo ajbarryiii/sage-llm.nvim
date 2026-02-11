@@ -3,6 +3,15 @@ local curl = require("plenary.curl")
 
 local M = {}
 
+-- Debug helper that works in fast event context
+local function debug_log(msg)
+  local f = io.open("/tmp/sage-llm-debug.log", "a")
+  if f then
+    f:write(os.date("%H:%M:%S") .. " " .. msg .. "\n")
+    f:close()
+  end
+end
+
 ---@class SageStreamCallbacks
 ---@field on_start function|nil Called when streaming starts
 ---@field on_token function Called with each token: function(token: string)
@@ -215,19 +224,24 @@ function M.chat(messages, callback)
       end)
     end,
     callback = function(response)
+      debug_log("callback fired, cancelled=" .. tostring(cancelled))
+      
       if cancelled then
         return
       end
 
+      debug_log("response exists=" .. tostring(response ~= nil))
+      if response then
+        debug_log("response.status=" .. tostring(response.status))
+        debug_log("response.body length=" .. tostring(response.body and #response.body or "nil"))
+        debug_log("response.body first 500 chars=" .. tostring(response.body and response.body:sub(1, 500) or "nil"))
+      end
+
       vim.schedule(function()
-        vim.notify("DEBUG api.lua: inside vim.schedule", vim.log.levels.INFO)
-        vim.notify(
-          "DEBUG api.lua: response=" .. tostring(response ~= nil) .. ", status=" .. tostring(response and response.status or "nil"),
-          vim.log.levels.INFO
-        )
+        debug_log("inside vim.schedule")
 
         if not response then
-          vim.notify("DEBUG api.lua: response is nil!", vim.log.levels.ERROR)
+          debug_log("response is nil!")
           callback(nil, "No response received")
           return
         end
@@ -240,31 +254,26 @@ function M.chat(messages, callback)
               err_msg = err_msg .. ": " .. (err_data.error.message or vim.inspect(err_data.error))
             end
           end
-          vim.notify("DEBUG api.lua: calling callback with error: " .. err_msg, vim.log.levels.INFO)
+          debug_log("error: " .. err_msg)
           callback(nil, err_msg)
           return
         end
 
-        vim.notify("DEBUG api.lua: body length=" .. tostring(response.body and #response.body or "nil"), vim.log.levels.INFO)
-
         local ok, data = pcall(vim.json.decode, response.body)
-        vim.notify("DEBUG api.lua: json decode ok=" .. tostring(ok), vim.log.levels.INFO)
+        debug_log("json decode ok=" .. tostring(ok))
 
         if not ok then
-          vim.notify("DEBUG api.lua: json error: " .. tostring(data), vim.log.levels.ERROR)
+          debug_log("json error: " .. tostring(data))
           callback(nil, "Failed to parse response")
           return
         end
 
         if data.choices and data.choices[1] and data.choices[1].message then
           local content = data.choices[1].message.content
-          vim.notify(
-            "DEBUG api.lua: content length=" .. tostring(content and #content or "nil"),
-            vim.log.levels.INFO
-          )
+          debug_log("content length=" .. tostring(content and #content or "nil"))
           callback(content, nil)
         else
-          vim.notify("DEBUG api.lua: unexpected format: " .. vim.inspect(data):sub(1, 200), vim.log.levels.INFO)
+          debug_log("unexpected format")
           callback(nil, "Unexpected response format")
         end
       end)
