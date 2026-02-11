@@ -29,28 +29,14 @@ local function execute_query(sel, question)
   -- Build messages for API
   local messages = prompt.build_messages(sel, question)
 
-  -- Track if we've received first token
-  local first_token = true
-
-  -- Make streaming request
-  local handle = api.stream_chat(messages, {
-    on_start = function()
-      -- Already showing loading
-    end,
-    on_token = function(token)
-      if first_token then
-        first_token = false
-        ui.response.start_streaming()
-      end
-      ui.response.append_token(token)
-    end,
-    on_complete = function()
-      ui.response.complete()
-    end,
-    on_error = function(err)
+  -- Make non-streaming request and display complete response
+  local handle = api.chat(messages, function(response, err)
+    if err then
       ui.response.show_error(err)
-    end,
-  })
+    elseif response then
+      ui.response.set_response(response)
+    end
+  end)
 
   if handle then
     ui.response.set_request_handle(handle)

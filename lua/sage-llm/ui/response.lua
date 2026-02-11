@@ -190,7 +190,7 @@ function M.open(code_header)
     border = ui_config.border,
     title = " sage-llm ",
     title_pos = "center",
-    footer = " q close | y yank | <C-c> cancel ",
+    footer = " q close | y yank ",
     footer_pos = "center",
   })
 
@@ -291,6 +291,35 @@ function M.complete()
   stop_spinner()
   state.is_streaming = false
   state.request_handle = nil
+end
+
+---Set the complete response text at once (non-streaming)
+---@param text string The complete response text
+function M.set_response(text)
+  stop_spinner()
+  state.is_streaming = false
+
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return
+  end
+
+  -- Remove loading line if present
+  local line_count = vim.api.nvim_buf_line_count(state.bufnr)
+  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1]
+    or ""
+
+  if last_line:match("Thinking") then
+    vim.api.nvim_buf_set_lines(state.bufnr, line_count - 1, line_count, false, {})
+  end
+
+  -- Add the complete response
+  local response_lines = vim.split(text, "\n", { plain = true })
+  vim.api.nvim_buf_set_lines(state.bufnr, -1, -1, false, response_lines)
+
+  -- Scroll to top of response
+  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+    vim.api.nvim_win_set_cursor(state.winid, { state.content_start_line + 1, 0 })
+  end
 end
 
 ---Show an error message
