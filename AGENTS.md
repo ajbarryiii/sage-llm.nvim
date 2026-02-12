@@ -18,6 +18,7 @@ This plugin is designed for developers learning new languages or debugging synta
 lua/sage-llm/
 ├── init.lua           # Public API: setup(), ask(), explain(), fix(), select_model()
 ├── config.lua         # Configuration management, defaults, validation
+├── config_file.lua    # External config file loading/saving (~/.config/sage-llm/config.lua)
 ├── api.lua            # OpenRouter HTTP client, SSE streaming
 ├── selection.lua      # Visual selection extraction
 ├── diagnostics.lua    # LSP diagnostics gathering (vim.diagnostic.get)
@@ -59,6 +60,42 @@ plugin/
 | `:SageDepsOn` | Enable dependency detection for session |
 | `:SageDepsOff` | Disable dependency detection |
 | `:SageConfig` | Open config file for editing |
+
+## Config File (`~/.config/sage-llm/config.lua`)
+
+### Auto-Creation
+- On first `setup()` call, if config file doesn't exist, a template is auto-created
+- Notification shows: "Created config file at ~/.config/sage-llm/config.lua. Edit it to add your API key."
+- User runs `:SageConfig` to open and edit the file
+
+### Structure
+```lua
+return {
+  api_key = "sk-or-v1-...",  -- Required: OpenRouter API key
+  model = "anthropic/...",    -- Optional: current model (auto-updated by :SageModel)
+}
+```
+
+### Priority Order
+Configuration values are resolved in this order (highest to lowest):
+1. **Config file** (`~/.config/sage-llm/config.lua`)
+2. **setup() opts** (in Neovim config)
+3. **Environment variable** (`$OPENROUTER_API_KEY` for api_key only)
+4. **Defaults**
+
+### Model Persistence
+- When user runs `:SageModel` and selects a model, it's **automatically saved** to config file
+- On next Neovim startup, the selected model is loaded from config file
+- Model name is displayed in response window title: `" sage-llm (claude-sonnet-4.5) "`
+
+### Implementation Details
+- File location: `~/.config/sage-llm/config.lua` (respects `$XDG_CONFIG_HOME`)
+- Module: `lua/sage-llm/config_file.lua`
+- Functions:
+  - `load()` - Load config table from file
+  - `save(config)` - Save full config table (preserves api_key)
+  - `update(key, value)` - Update single key in config
+  - `create_template()` - Create template on first run
 
 ## User Flow
 

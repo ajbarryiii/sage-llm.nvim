@@ -179,6 +179,9 @@ function M.open(code_header)
   vim.bo[state.bufnr].modifiable = true
   vim.bo[state.bufnr].filetype = "markdown"
 
+  -- Get just the model name (after the slash)
+  local model_name = config.options.model:match("[^/]+$") or config.options.model
+
   -- Create window
   state.winid = vim.api.nvim_open_win(state.bufnr, true, {
     relative = "editor",
@@ -188,7 +191,7 @@ function M.open(code_header)
     col = col,
     style = "minimal",
     border = ui_config.border,
-    title = " sage-llm ",
+    title = " sage-llm (" .. model_name .. ") ",
     title_pos = "center",
     footer = " q close | y yank ",
     footer_pos = "center",

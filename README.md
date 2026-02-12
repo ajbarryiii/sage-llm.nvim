@@ -62,14 +62,21 @@ use {
 
 1. Sign up at [OpenRouter](https://openrouter.ai)
 2. Generate an API key
-3. Set it as an environment variable:
+3. **On first run**, sage-llm will auto-create `~/.config/sage-llm/config.lua`
+4. Run `:SageConfig` to open the config file
+5. Set your API key:
 
-```bash
-# In your ~/.bashrc, ~/.zshrc, etc.
-export OPENROUTER_API_KEY="sk-or-v1-..."
+```lua
+return {
+  api_key = "sk-or-v1-...",
+}
 ```
 
-**⚠️ Security Note**: Don't put your API key directly in your Neovim config if you sync it to a public repo. Use an environment variable or a dedicated config file.
+6. Restart Neovim (or re-source your config)
+
+**Alternative methods** (less recommended):
+- **Environment variable**: `export OPENROUTER_API_KEY="sk-or-v1-..."`
+- **In setup()**: `require("sage-llm").setup({ api_key = "..." })` (don't commit this to public repos!)
 
 ### 2. Configure Keymaps (Optional)
 
@@ -103,6 +110,7 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | `:SageExplain` | Explain what the selected code does |
 | `:SageFix` | Explain how to fix errors/warnings in selection |
 | `:SageModel` | Open model picker to switch LLMs |
+| `:SageConfig` | Open config file for editing |
 | `:SageDepsOn` | Enable dependency detection (slower, more context) |
 | `:SageDepsOff` | Disable dependency detection (default) |
 
@@ -122,12 +130,28 @@ When using `:SageAsk`:
 
 ## Configuration
 
-Full configuration with defaults:
+### Config File (Recommended)
+
+Edit `~/.config/sage-llm/config.lua` (or run `:SageConfig`):
+
+```lua
+return {
+  -- Your OpenRouter API key (required)
+  api_key = "sk-or-v1-...",
+  
+  -- Model to use (optional, selected model is auto-saved here)
+  model = "anthropic/claude-sonnet-4-20250514",
+}
+```
+
+### Setup Configuration (Optional)
+
+You can override UI settings and prompts in your Neovim config:
 
 ```lua
 require("sage-llm").setup({
-  -- API settings
-  api_key = nil,  -- Falls back to $OPENROUTER_API_KEY
+  -- API settings (config file takes precedence)
+  api_key = nil,  -- Falls back to config file, then $OPENROUTER_API_KEY
   model = "anthropic/claude-sonnet-4-20250514",
   base_url = "https://openrouter.ai/api/v1",
   
@@ -258,18 +282,16 @@ make test
 
 ### "No API key found"
 
-Set the `OPENROUTER_API_KEY` environment variable:
+**Recommended:** Edit the config file:
+
+1. Run `:SageConfig`
+2. Set `api_key = "sk-or-v1-..."`
+3. Restart Neovim
+
+**Alternative:** Set environment variable:
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-Or configure in `setup()`:
-
-```lua
-require("sage-llm").setup({
-  api_key = "sk-or-v1-...",  -- Not recommended for public repos
-})
 ```
 
 ### "No selection found"
@@ -282,7 +304,6 @@ Install [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) in your Neovim 
 
 ## Roadmap
 
-- [ ] Dedicated config file (`~/.config/sage-llm/config.lua`)
 - [ ] Conversation history (multi-turn conversations)
 - [ ] Code replacement actions (apply suggested fixes)
 - [ ] Custom actions (user-defined prompt templates)
