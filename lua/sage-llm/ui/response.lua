@@ -294,6 +294,9 @@ function M.complete()
   stop_spinner()
   state.is_streaming = false
   state.request_handle = nil
+
+  -- Switch to normal mode
+  vim.cmd("stopinsert")
 end
 
 ---Set the complete response text at once (non-streaming)
@@ -323,6 +326,9 @@ function M.set_response(text)
   if state.winid and vim.api.nvim_win_is_valid(state.winid) then
     vim.api.nvim_win_set_cursor(state.winid, { state.content_start_line + 1, 0 })
   end
+
+  -- Switch to normal mode
+  vim.cmd("stopinsert")
 end
 
 ---Show an error message
@@ -347,6 +353,9 @@ function M.show_error(message)
 
   -- Add error message
   vim.api.nvim_buf_set_lines(state.bufnr, -1, -1, false, { "", "Error: " .. message })
+
+  -- Switch to normal mode
+  vim.cmd("stopinsert")
 end
 
 ---Set the request handle for cancellation
