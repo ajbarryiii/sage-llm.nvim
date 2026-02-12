@@ -58,6 +58,13 @@ local function create_commands()
   end, {
     desc = "Disable dependency detection",
   })
+
+  -- :SageConfig - Open config file for editing
+  vim.api.nvim_create_user_command("SageConfig", function()
+    require("sage-llm").edit_config()
+  end, {
+    desc = "Edit sage-llm config file",
+  })
 end
 
 create_commands()

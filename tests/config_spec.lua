@@ -1,10 +1,23 @@
 describe("config", function()
   local config
+  local original_env
 
   before_each(function()
+    -- Store original env
+    original_env = vim.env.XDG_CONFIG_HOME
+
+    -- Point to non-existent config to avoid loading real config
+    vim.env.XDG_CONFIG_HOME = "/nonexistent/test/path"
+
     -- Reset module cache
+    package.loaded["sage-llm.config_file"] = nil
     package.loaded["sage-llm.config"] = nil
     config = require("sage-llm.config")
+  end)
+
+  after_each(function()
+    -- Restore original env
+    vim.env.XDG_CONFIG_HOME = original_env
   end)
 
   describe("defaults", function()
@@ -93,6 +106,21 @@ describe("config", function()
       config.setup({})
       config.set_model("google/gemini-2.0-flash")
       assert.equals("google/gemini-2.0-flash", config.options.model)
+    end)
+  end)
+
+  describe("get_config_path", function()
+    it("returns the config file path", function()
+      local path = config.get_config_path()
+      assert.is_string(path)
+      assert.truthy(path:match("config%.lua$"))
+    end)
+  end)
+
+  describe("config file integration", function()
+    it("setup opts are applied when no config file exists", function()
+      config.setup({ model = "test-model" })
+      assert.equals("test-model", config.options.model)
     end)
   end)
 end)

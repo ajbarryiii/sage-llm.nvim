@@ -21,6 +21,8 @@
 ---@field border string Border style
 ---@field prompt string Prompt text shown in title
 
+local config_file = require("sage-llm.config_file")
+
 local M = {}
 
 ---@type SageConfig
@@ -78,12 +80,37 @@ Rules:
 M.options = vim.deepcopy(M.defaults)
 
 ---Merge user options with defaults
+---Priority: config file > setup() opts > env var > defaults
 ---@param opts SageConfig|nil
 function M.setup(opts)
   opts = opts or {}
 
-  -- Deep merge user options with defaults
-  M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+  -- Start with defaults
+  local base = vim.deepcopy(M.defaults)
+
+  -- Merge setup() opts (lower priority)
+  base = vim.tbl_deep_extend("force", base, opts)
+
+  -- Load external config file (highest priority)
+  local external, err = config_file.load()
+  if external then
+    base = vim.tbl_deep_extend("force", base, external)
+  elseif err then
+    vim.notify("sage-llm: " .. err, vim.log.levels.WARN)
+  elseif not config_file.exists() then
+    -- First run: create template config file
+    local created, create_err = config_file.create_template()
+    if created then
+      vim.notify(
+        "sage-llm: Created config file at " .. config_file.get_config_path() .. "\nEdit it to add your API key.",
+        vim.log.levels.INFO
+      )
+    elseif create_err then
+      vim.notify("sage-llm: " .. create_err, vim.log.levels.WARN)
+    end
+  end
+
+  M.options = base
 
   -- Validate required fields
   M.validate()
@@ -118,10 +145,25 @@ function M.set_detect_dependencies(enabled)
   M.options.detect_dependencies = enabled
 end
 
----Set the current model
+---Set the current model and persist to config file
 ---@param model string
-function M.set_model(model)
+---@param persist boolean|nil Whether to persist to config file (default: true)
+function M.set_model(model, persist)
   M.options.model = model
+
+  -- Persist to config file by default
+  if persist ~= false then
+    local ok, err = config_file.update("model", model)
+    if not ok and err then
+      vim.notify("sage-llm: Failed to save model: " .. err, vim.log.levels.WARN)
+    end
+  end
+end
+
+---Get the path to the external config file
+---@return string
+function M.get_config_path()
+  return config_file.get_config_path()
 end
 
 return M

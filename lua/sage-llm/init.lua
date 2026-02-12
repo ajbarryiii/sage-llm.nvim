@@ -155,4 +155,16 @@ function M.setup(opts)
   config.setup(opts)
 end
 
+---Get the path to the config file
+---@return string
+function M.get_config_path()
+  return config.get_config_path()
+end
+
+---Open the config file for editing
+function M.edit_config()
+  local path = config.get_config_path()
+  vim.cmd("edit " .. vim.fn.fnameescape(path))
+end
+
 return M

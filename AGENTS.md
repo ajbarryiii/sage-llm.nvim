@@ -44,7 +44,8 @@ plugin/
 | Context scope | Selection only | No surrounding code included |
 | Dependency detection | Opt-in | User enables with `:SageDepsOn` (perf consideration) |
 | Default keymaps | None | User must configure their own |
-| LLM Provider | OpenRouter | Bring your own API key via `$OPENROUTER_API_KEY` |
+| LLM Provider | OpenRouter | Bring your own API key via config file or `$OPENROUTER_API_KEY` |
+| Config file | `~/.config/sage-llm/config.lua` | XDG-compliant, auto-created on first run |
 | Default model | anthropic/claude-sonnet-4-20250514 | Good balance of quality/speed for code explanation |
 
 ## User Commands
@@ -57,6 +58,7 @@ plugin/
 | `:SageModel` | Open model picker |
 | `:SageDepsOn` | Enable dependency detection for session |
 | `:SageDepsOff` | Disable dependency detection |
+| `:SageConfig` | Open config file for editing |
 
 ## User Flow
 
@@ -209,4 +211,4 @@ Only run when `detect_dependencies = true` (set via `:SageDepsOn`).
 
 ## Future Work / TODOs
 
-- [ ] **Dedicated config file**: Migrate from storing API key in Neovim config (`setup()`) to a dedicated config file at `~/.config/sage-llm/config.lua`. This keeps sensitive data out of dotfiles repos and provides a single location for plugin configuration.
+None currently.
