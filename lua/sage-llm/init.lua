@@ -15,7 +15,7 @@ local models = require("sage-llm.models")
 
 local M = {}
 
----Execute a query with the given question
+---Execute a query with the given question (with code selection)
 ---@param sel SageSelection
 ---@param question string
 local function execute_query(sel, question)
@@ -43,25 +43,63 @@ local function execute_query(sel, question)
   end
 end
 
----Ask a question about the current visual selection
----Opens input buffer for user to type question
-function M.ask()
-  -- Get selection first (while still in visual mode context)
-  local sel, err = selection.get_visual_selection()
-  if not sel then
-    vim.notify("sage-llm: " .. (err or "No selection"), vim.log.levels.WARN)
-    return
-  end
+---Execute a simple query without code selection
+---@param question string
+local function execute_simple_query(question)
+  -- Build the question header for display
+  local question_header = prompt.format_question_header(question)
 
-  -- Open input for question
-  ui.input.open({
-    on_submit = function(question)
-      execute_query(sel, question)
-    end,
-    on_cancel = function()
-      -- User cancelled, do nothing
-    end,
-  })
+  -- Open response window with question
+  ui.response.open(question_header)
+  ui.response.show_loading()
+
+  -- Build messages for API (no selection)
+  local messages = prompt.build_messages_no_selection(question)
+
+  -- Make non-streaming request and display complete response
+  local handle = api.chat(messages, function(response, err)
+    if err then
+      ui.response.show_error(err)
+    elseif response then
+      ui.response.set_response(response)
+    end
+  end)
+
+  if handle then
+    ui.response.set_request_handle(handle)
+  end
+end
+
+---Ask a question about code
+---In visual mode: asks about the selection
+---In normal mode: asks a general question
+function M.ask()
+  -- Try to get visual selection
+  local sel = selection.get_visual_selection()
+
+  if sel then
+    -- Visual mode: ask about selection
+    ui.input.open({
+      prompt = "Ask about this code:",
+      on_submit = function(question)
+        execute_query(sel, question)
+      end,
+      on_cancel = function()
+        -- User cancelled, do nothing
+      end,
+    })
+  else
+    -- Normal mode: ask without selection
+    ui.input.open({
+      prompt = "Ask a question:",
+      on_submit = function(question)
+        execute_simple_query(question)
+      end,
+      on_cancel = function()
+        -- User cancelled, do nothing
+      end,
+    })
+  end
 end
 
 ---Explain the current visual selection

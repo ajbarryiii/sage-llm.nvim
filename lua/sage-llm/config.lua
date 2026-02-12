@@ -6,7 +6,8 @@
 ---@field input SageInputConfig Input window configuration
 ---@field detect_dependencies boolean Whether to detect and include dependencies
 ---@field models string[] Available models for picker
----@field system_prompt string System prompt for the LLM
+---@field system_prompt string System prompt for the LLM (with code selection)
+---@field system_prompt_no_selection string System prompt for the LLM (without code selection)
 ---@field debug boolean Enable debug logging to /tmp/sage-llm-debug.log
 
 ---@class SageResponseConfig
@@ -25,7 +26,7 @@ local M = {}
 ---@type SageConfig
 M.defaults = {
   api_key = nil,
-  model = "anthropic/claude-sonnet-4-20250514",
+  model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
 
   response = {
@@ -45,12 +46,14 @@ M.defaults = {
   debug = false,
 
   models = {
-    "anthropic/claude-sonnet-4-20250514",
-    "anthropic/claude-3-5-haiku",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash",
-    "deepseek/deepseek-chat",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.2-codex",
+    "moonshotai/kimi-k2.5",
+    "google/gemini-3-flash-preview",
+    "anthropic/claude-sonnet-4.5",
+    "x-ai/grok-4.1-fast",
+    "anthropic/claude-opus-4.6",
+    "anthropic/claude-haiku-4.5",
   },
 
   system_prompt = [[You are a concise coding tutor helping a developer understand code.
@@ -61,6 +64,14 @@ Rules:
 - Only show multi-line code blocks when essential for understanding
 - When explaining errors, focus on the "why" not just the fix
 - Reference language concepts by name (e.g., "ownership", "borrow checker", "lifetime")]],
+
+  system_prompt_no_selection = [[You are a concise coding assistant.
+
+Rules:
+- Be brief and direct
+- Use `inline code` for short references rather than full code blocks
+- Only show multi-line code blocks when essential for understanding
+- Focus on practical, actionable answers]],
 }
 
 ---@type SageConfig
@@ -91,6 +102,7 @@ function M.validate()
     debug = { M.options.debug, "boolean" },
     models = { M.options.models, "table" },
     system_prompt = { M.options.system_prompt, "string" },
+    system_prompt_no_selection = { M.options.system_prompt_no_selection, "string" },
   })
 end
 

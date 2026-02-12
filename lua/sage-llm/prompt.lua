@@ -75,4 +75,30 @@ function M.format_code_header(selection)
   return table.concat(lines, "\n")
 end
 
+---Build the complete messages array for a simple query (no code selection)
+---@param question string
+---@return table[] messages Array of {role, content} tables
+function M.build_messages_no_selection(question)
+  return {
+    {
+      role = "system",
+      content = config.options.system_prompt_no_selection,
+    },
+    {
+      role = "user",
+      content = question,
+    },
+  }
+end
+
+---Format question for display in response window header
+---@param question string
+---@return string
+function M.format_question_header(question)
+  local lines = {}
+  table.insert(lines, "> " .. question)
+  table.insert(lines, "")
+  return table.concat(lines, "\n")
+end
+
 return M

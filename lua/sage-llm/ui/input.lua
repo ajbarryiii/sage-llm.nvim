@@ -89,7 +89,7 @@ local function setup_keymaps(bufnr)
 end
 
 ---Open the input window
----@param opts {on_submit: function, on_cancel: function|nil}
+---@param opts {on_submit: function, on_cancel: function|nil, prompt: string|nil}
 function M.open(opts)
   -- Close existing window if open
   close_window()
@@ -98,6 +98,7 @@ function M.open(opts)
   state.on_cancel = opts.on_cancel
 
   local ui_config = config.options.input
+  local prompt_text = opts.prompt or ui_config.prompt
 
   -- Calculate window dimensions
   local editor_width = vim.o.columns
@@ -125,7 +126,7 @@ function M.open(opts)
     col = col,
     style = "minimal",
     border = ui_config.border,
-    title = " " .. ui_config.prompt .. " ",
+    title = " " .. prompt_text .. " ",
     title_pos = "center",
     footer = " <CR> submit | <S-CR> newline | q cancel ",
     footer_pos = "center",
