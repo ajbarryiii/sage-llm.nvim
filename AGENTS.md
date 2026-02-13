@@ -131,7 +131,7 @@ Question: {user_question}
 ```lua
 {
   api_key = nil,                              -- Falls back to $OPENROUTER_API_KEY
-  model = "anthropic/claude-sonnet-4-20250514",
+  model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
   
   response = {
@@ -149,13 +149,15 @@ Question: {user_question}
   
   detect_dependencies = false,                -- Toggle with :SageDepsOn/Off
   
-  models = {                                  -- Available in picker
-    "anthropic/claude-sonnet-4-20250514",
-    "anthropic/claude-3-5-haiku",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash",
-    "deepseek/deepseek-chat",
+  models = {                                  -- List of models in picker
+    "openai/gpt-5-nano",
+    "openai/gpt-5.2-codex",
+    "moonshotai/kimi-k2.5",
+    "google/gemini-3-flash-preview",
+    "anthropic/claude-sonnet-4.5",
+    "x-ai/grok-4.1-fast",
+    "anthropic/claude-opus-4.6",
+    "anthropic/claude-haiku-4.5",
   },
   
   system_prompt = [[...]],                    -- Tuned for concise teaching

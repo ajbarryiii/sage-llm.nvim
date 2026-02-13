@@ -22,7 +22,7 @@ describe("config", function()
 
   describe("defaults", function()
     it("has default model", function()
-      assert.equals("anthropic/claude-sonnet-4-20250514", config.defaults.model)
+      assert.equals("openai/gpt-oss-20b", config.defaults.model)
     end)
 
     it("has default base_url", function()

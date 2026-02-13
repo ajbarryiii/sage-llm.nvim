@@ -48,6 +48,7 @@ M.defaults = {
   debug = false,
 
   models = {
+    "openai/gpt-oss-20b",
     "openai/gpt-5-nano",
     "openai/gpt-5.2-codex",
     "moonshotai/kimi-k2.5",
@@ -102,7 +103,9 @@ function M.setup(opts)
     local created, create_err = config_file.create_template()
     if created then
       vim.notify(
-        "sage-llm: Created config file at " .. config_file.get_config_path() .. "\nEdit it to add your API key.",
+        "sage-llm: Created config file at "
+          .. config_file.get_config_path()
+          .. "\nEdit it to add your API key.",
         vim.log.levels.INFO
       )
     elseif create_err then

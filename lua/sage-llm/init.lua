@@ -29,14 +29,35 @@ local function execute_query(sel, question)
   -- Build messages for API
   local messages = prompt.build_messages(sel, question)
 
-  -- Make non-streaming request and display complete response
-  local handle = api.chat(messages, function(response, err)
-    if err then
+  if config.options.debug then
+    vim.schedule(function()
+      vim.notify("sage-llm: execute_query using stream_chat", vim.log.levels.INFO)
+    end)
+  end
+
+  -- Make streaming request and display tokens as they arrive
+  local started = false
+  local handle = api.stream_chat(messages, {
+    on_start = function()
+      -- Keep spinner until first token arrives
+    end,
+    on_token = function(token)
+      if not started then
+        ui.response.start_streaming()
+        started = true
+      end
+      ui.response.append_token(token)
+    end,
+    on_complete = function()
+      if not started then
+        ui.response.start_streaming()
+      end
+      ui.response.complete()
+    end,
+    on_error = function(err)
       ui.response.show_error(err)
-    elseif response then
-      ui.response.set_response(response)
-    end
-  end)
+    end,
+  })
 
   if handle then
     ui.response.set_request_handle(handle)
@@ -56,14 +77,35 @@ local function execute_simple_query(question)
   -- Build messages for API (no selection)
   local messages = prompt.build_messages_no_selection(question)
 
-  -- Make non-streaming request and display complete response
-  local handle = api.chat(messages, function(response, err)
-    if err then
+  if config.options.debug then
+    vim.schedule(function()
+      vim.notify("sage-llm: execute_simple_query using stream_chat", vim.log.levels.INFO)
+    end)
+  end
+
+  -- Make streaming request and display tokens as they arrive
+  local started = false
+  local handle = api.stream_chat(messages, {
+    on_start = function()
+      -- Keep spinner until first token arrives
+    end,
+    on_token = function(token)
+      if not started then
+        ui.response.start_streaming()
+        started = true
+      end
+      ui.response.append_token(token)
+    end,
+    on_complete = function()
+      if not started then
+        ui.response.start_streaming()
+      end
+      ui.response.complete()
+    end,
+    on_error = function(err)
       ui.response.show_error(err)
-    elseif response then
-      ui.response.set_response(response)
-    end
-  end)
+    end,
+  })
 
   if handle then
     ui.response.set_request_handle(handle)
