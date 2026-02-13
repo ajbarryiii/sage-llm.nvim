@@ -41,7 +41,7 @@ local setup_keymaps
 local function footer_text()
   local search_state = state.search_enabled and "on" or "off"
   if state.edit_pending then
-    return " A apply+hide | a apply | r reject | q hide | y yank | S search:" .. search_state .. " "
+    return " A accept+close | a apply | r reject | q hide | y yank | S search:" .. search_state .. " "
   end
   return " q hide | y yank | f follow-up | S search:" .. search_state .. " "
 end

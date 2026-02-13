@@ -1,26 +1,28 @@
 # sage-llm.nvim
 
-A Neovim plugin that lets you highlight code in visual mode and ask an LLM about it. LSP diagnostics within the selection are automatically included for better context.
+A plugin for interacting with LLMs in neovim.
 
 ## Why?
 
-Suppose you have a simple syntax question, or want to understand a complier error. Do you really want to open up a window to ask claude or chatgpt? Or would it be better to just have it right in neovim. `sage-llm.nvim` lets you ask all these simple queries right from neovim. It is specifically intended for: 
+Suppose you have a simple question, want to understand a complier error or LSP diagnostic. Do you really want to open up a window and copy+paste into claude or chatgpt? You're using vim, of course you don't, you're allergic to the mouse. `sage-llm.nvim` lets you ask all these simple queries right from neovim. It is specifically intended for: 
+
 - **Compiler errors** 
 - **Type errors** and warnings
 - **Syntax issues** in unfamiliar languages
 - **Code patterns** you haven't seen before
+- **ANYTHING ELSE** because fuck it, you're a dev, you're not a chatbot.
 
 Get concise explanations without leaving your editor.
 
 ## Features
 
-- 🔍 **Ask about selected code** - Highlight and ask questions
-- 🩺 **LSP diagnostics** - Automatically includes error codes and messages
-- 📦 **Dependency detection** - Understands your project's dependencies (Rust, JS/TS, Python, Go)
-- 🌊 **Streaming responses** - See answers as they generate
-- ✍️ **Inline edits** - Replace selected code with AI edits (`:SageInfill`)
-- 🎯 **Concise explanations** - Focuses on the "why", not just the "fix"
-- 🔄 **Multiple models** - Switch between Claude, GPT-4, Gemini, etc.
+-  **Ask about selected code** - Highlight and ask questions
+-  **LSP diagnostics** - Automatically includes error codes and messages
+-  **Dependency detection** - Understands your project's dependencies (Rust, JS/TS, Python, Go)
+-  **Streaming responses** - See answers as they generate
+-  **Inline edits** - Replace selected code with AI edits (`:SageInfill`)
+-  **Concise explanations** - Focuses on the "why", not just the "fix"
+-  **Multiple models** - Switch between Claude, GPT-5, Gemini, etc.
 
 ## Requirements
 
@@ -86,6 +88,7 @@ The plugin doesn't set default keymaps. Add your own:
 ```lua
 -- In your Neovim config
 vim.keymap.set("v", "<leader>sa", ":SageAsk<CR>", { desc = "Ask LLM about selection" })
+vim.keymap.set("n", "<leader>sa", ":SageAsk<CR>", { desc = "Ask LLM (no selection)" })
 vim.keymap.set("v", "<leader>se", ":SageExplain<CR>", { desc = "Explain selection" })
 vim.keymap.set("v", "<leader>sx", ":SageFix<CR>", { desc = "Fix diagnostics" })
 vim.keymap.set("v", "<leader>sk", ":SageInfill<CR>", { desc = "Inline edit selection" })
@@ -102,7 +105,7 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
    - `:SageExplain` - Explains the code immediately
    - `:SageFix` - Explains how to fix diagnostics
    - `:SageInfill` - Generates inline replacement for selected code
-3. **Read the response** in the floating window
+3. **Read the response** in the floating window (if you want, I'm not here to tell you what to do)
 4. Press `q` to hide, `y` to yank response, `f` to ask follow-up, `S` to toggle web search for the next query
 
 ### Commands
@@ -213,37 +216,6 @@ Rules:
 })
 ```
 
-## Examples
-
-### Understanding a Rust Borrow Checker Error
-
-```rust
-let x = String::from("hello");
-let y = &x;
-let z = x;  // Error: borrow of moved value
-println!("{}", y);
-```
-
-1. Select the code
-2. Run `:SageFix`
-3. Get explanation:
-   > The error occurs because `x` is moved to `z` on line 3. After a move, the original binding `x` 
-   > becomes invalid. Since `y` is a reference to `x`, using `y` after `x` is moved violates Rust's 
-   > ownership rules. To fix: either clone `x` (`let z = x.clone()`), borrow it (`let z = &x`), or 
-   > reorder so `y` is used before the move.
-
-### Learning TypeScript Syntax
-
-```typescript
-const users: User[] = await fetchUsers();
-const names = users.map(u => u.name);
-```
-
-1. Select `users.map(u => u.name)`
-2. Run `:SageAsk`
-3. Type: "what does this arrow function syntax mean?"
-4. Get explanation of arrow functions and their concise form
-
 ## Dependency Detection
 
 By default, dependency detection is **off** for performance. Enable it for better context:
@@ -252,7 +224,7 @@ By default, dependency detection is **off** for performance. Enable it for bette
 :SageDepsOn
 ```
 
-Supported languages:
+Supported languages :
 - **Rust** - Parses `Cargo.toml`
 - **JavaScript/TypeScript** - Parses `package.json`
 - **Python** - Parses `pyproject.toml` or `requirements.txt`
@@ -270,57 +242,6 @@ Switch models with `:SageModel` or configure in `setup()`:
 - `:SageModelRemove` jumps directly to the remove-model picker.
 
 See [OpenRouter pricing](https://openrouter.ai/models) for cost comparison.
-
-## Development
-
-```bash
-# Enter dev shell (if using Nix)
-nix develop
-
-# Or install tools manually
-# - Neovim >= 0.10
-# - luacheck
-# - stylua
-# - busted (via plenary.nvim)
-
-# Lint
-make lint
-
-# Format
-make format
-
-# Test
-make test
-```
-
-## Troubleshooting
-
-### "No API key found"
-
-**Recommended:** Edit the config file:
-
-1. Run `:SageConfig`
-2. Set `api_key = "sk-or-v1-..."`
-3. Restart Neovim
-
-**Alternative:** Set environment variable:
-
-```bash
-export OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-### "No selection found"
-
-Make sure you're in visual mode (v, V, or Ctrl-v) when running commands. The commands only work on visual selections.
-
-### Tests fail with "command not found: PlenaryBustedDirectory"
-
-Install [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) in your Neovim setup.
-
-## Roadmap
-
-- [ ] Custom actions (user-defined prompt templates)
-- [ ] `:checkhealth` integration
 
 ## License
 
