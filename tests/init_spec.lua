@@ -24,6 +24,7 @@ describe("init conversation view", function()
     restore_preload("sage-llm.actions")
     restore_preload("sage-llm.models")
     restore_preload("sage-llm.conversation")
+    restore_preload("sage-llm.infill")
     package.loaded["sage-llm"] = nil
   end)
 
@@ -183,5 +184,97 @@ describe("init conversation view", function()
     assert.equals(2, stream_calls)
     assert.is_true(stream_opts[1].search)
     assert.is_false(stream_opts[2].search)
+  end)
+
+  it("runs infill flow and applies replacement", function()
+    local chat_calls = 0
+    local applied = 0
+    local set_edit_actions_calls = 0
+
+    stub_module("sage-llm.config", {
+      options = {
+        input = { height = 5, infill_prompt = "Describe the edit:" },
+      },
+    })
+    stub_module("sage-llm.selection", {
+      get_visual_selection = function()
+        return {
+          text = "print('old')",
+          bufnr = 1,
+          start_line = 1,
+          end_line = 1,
+          start_col = 0,
+          end_col = 12,
+          mode = "v",
+          filetype = "python",
+          filepath = "x.py",
+        }
+      end,
+    })
+    stub_module("sage-llm.prompt", {
+      format_code_header = function(_)
+        return "```python\nprint('old')\n```\n"
+      end,
+      build_infill_messages = function(_, _)
+        return {
+          { role = "user", content = "infill" },
+        }
+      end,
+      format_infill_preview = function(_, replacement, _)
+        return replacement
+      end,
+    })
+    stub_module("sage-llm.api", {
+      chat = function(_, cb, _)
+        chat_calls = chat_calls + 1
+        cb("print('new')", nil)
+        return { cancel = function() end }
+      end,
+    })
+    stub_module("sage-llm.actions", {})
+    stub_module("sage-llm.models", {})
+    stub_module("sage-llm.conversation", {
+      is_active = function()
+        return false
+      end,
+    })
+    stub_module("sage-llm.infill", {
+      normalize_response = function(text)
+        return text, nil
+      end,
+      apply_selection = function(_, _)
+        applied = applied + 1
+        return true, nil
+      end,
+    })
+    stub_module("sage-llm.ui", {
+      response = {
+        open = function(_) return true end,
+        show_loading = function() end,
+        start_streaming = function() end,
+        append_token = function(_) end,
+        complete = function() end,
+        set_on_followup = function(_) end,
+        set_request_handle = function(_) end,
+        set_edit_actions = function(on_accept, _)
+          set_edit_actions_calls = set_edit_actions_calls + 1
+          on_accept()
+        end,
+        clear_edit_actions = function() end,
+        set_search_enabled = function(_) end,
+      },
+      input = {
+        open = function(opts)
+          opts.on_submit("replace with new call")
+        end,
+      },
+    })
+
+    local sage = require("sage-llm")
+    sage.infill()
+
+    assert.equals(1, chat_calls)
+    assert.equals(1, set_edit_actions_calls)
+    assert.equals(1, applied)
   end)
 end)

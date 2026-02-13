@@ -13,6 +13,7 @@ local ui = require("sage-llm.ui")
 local actions = require("sage-llm.actions")
 local models = require("sage-llm.models")
 local conversation = require("sage-llm.conversation")
+local infill = require("sage-llm.infill")
 
 local M = {}
 
@@ -185,6 +186,56 @@ local function execute_simple_query(question)
   stream_response(messages, nil, opts)
 end
 
+---Execute an inline infill request for the current visual selection.
+---@param sel SageSelection
+---@param instruction string
+local function execute_infill(sel, instruction)
+  local opts = consume_request_opts()
+
+  local code_header = prompt.format_code_header(sel)
+  ui.response.open(code_header)
+  ui.response.show_loading()
+  ui.response.set_on_followup(nil)
+
+  local messages = prompt.build_infill_messages(sel, instruction)
+  local handle = api.chat(messages, function(content, err)
+    if err then
+      ui.response.show_error(err)
+      return
+    end
+
+    local replacement, normalize_err = infill.normalize_response(content or "")
+    if not replacement then
+      ui.response.show_error(normalize_err or "Failed to parse infill response")
+      return
+    end
+
+    ui.response.start_streaming()
+    ui.response.append_token(prompt.format_infill_preview(instruction, replacement, sel.filetype))
+    ui.response.complete()
+
+    ui.response.set_edit_actions(function(close_after_apply)
+      local ok, apply_err = infill.apply_selection(sel, replacement)
+      if not ok then
+        vim.notify("sage-llm: " .. (apply_err or "Failed to apply edit"), vim.log.levels.ERROR)
+        return
+      end
+      ui.response.clear_edit_actions()
+      vim.notify("sage-llm: Inline edit applied", vim.log.levels.INFO)
+      if close_after_apply then
+        ui.response.hide()
+      end
+    end, function()
+      ui.response.clear_edit_actions()
+      vim.notify("sage-llm: Inline edit discarded", vim.log.levels.INFO)
+    end)
+  end, opts)
+
+  if handle then
+    ui.response.set_request_handle(handle)
+  end
+end
+
 ---Ask a question about code
 ---In visual mode: asks about the selection
 ---In normal mode: asks a general question
@@ -253,6 +304,29 @@ function M.fix()
   if question then
     execute_query(sel, question)
   end
+end
+
+---Edit the current visual selection inline using an LLM-generated replacement.
+function M.infill()
+  local sel, err = selection.get_visual_selection()
+  if not sel then
+    vim.notify("sage-llm: " .. (err or "No selection"), vim.log.levels.WARN)
+    return
+  end
+
+  ui.input.open({
+    prompt = config.options.input.infill_prompt or "Describe the edit:",
+    search_enabled = request_opts.search,
+    on_toggle_search = function()
+      return toggle_search()
+    end,
+    on_submit = function(instruction)
+      execute_infill(sel, instruction)
+    end,
+    on_cancel = function()
+      -- User cancelled, do nothing
+    end,
+  })
 end
 
 ---Ask a follow-up question about the current conversation

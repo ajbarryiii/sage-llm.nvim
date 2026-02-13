@@ -8,6 +8,7 @@
 ---@field models string[] Available models for picker
 ---@field system_prompt string System prompt for the LLM (with code selection)
 ---@field system_prompt_no_selection string System prompt for the LLM (without code selection)
+---@field system_prompt_infill string System prompt for inline edits
 ---@field debug boolean Enable debug logging to /tmp/sage-llm-debug.log
 
 ---@class SageResponseConfig
@@ -43,6 +44,7 @@ M.defaults = {
     border = "rounded",
     prompt = "Ask about this code: ",
     followup_prompt = "Follow-up question:",
+    infill_prompt = "Describe the edit:",
   },
 
   detect_dependencies = false,
@@ -76,6 +78,14 @@ Rules:
 - Use `inline code` for short references rather than full code blocks
 - Only show multi-line code blocks when essential for understanding
 - Focus on practical, actionable answers]],
+
+  system_prompt_infill = [[You are an inline code editor.
+
+Rules:
+- Return only the replacement code for the selected region
+- Do not include markdown fences
+- Do not include explanations or commentary
+- Preserve the surrounding style and indentation]],
 }
 
 ---@type SageConfig
@@ -134,6 +144,7 @@ function M.validate()
     models = { M.options.models, "table" },
     system_prompt = { M.options.system_prompt, "string" },
     system_prompt_no_selection = { M.options.system_prompt_no_selection, "string" },
+    system_prompt_infill = { M.options.system_prompt_infill, "string" },
   })
 end
 

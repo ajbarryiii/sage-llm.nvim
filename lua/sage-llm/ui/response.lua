@@ -12,6 +12,9 @@ local M = {}
 ---@field on_followup function|nil Callback invoked when user presses 'f' to follow up
 ---@field on_toggle_search fun(): boolean|nil Callback invoked when user presses 'S'
 ---@field search_enabled boolean Whether web search is enabled for next query
+---@field on_accept_edit function|nil Callback invoked when user presses 'a'
+---@field on_reject_edit function|nil Callback invoked when user presses 'r'
+---@field edit_pending boolean Whether an inline edit is waiting for accept/reject
 
 ---@type SageResponseState
 local state = {
@@ -23,6 +26,9 @@ local state = {
   on_followup = nil,
   on_toggle_search = nil,
   search_enabled = false,
+  on_accept_edit = nil,
+  on_reject_edit = nil,
+  edit_pending = false,
 }
 
 -- Spinner frames for loading indicator
@@ -34,6 +40,9 @@ local setup_keymaps
 ---@return string
 local function footer_text()
   local search_state = state.search_enabled and "on" or "off"
+  if state.edit_pending then
+    return " A apply+hide | a apply | r reject | q hide | y yank | S search:" .. search_state .. " "
+  end
   return " q hide | y yank | f follow-up | S search:" .. search_state .. " "
 end
 
@@ -135,6 +144,9 @@ local function clear_state()
   state.on_followup = nil
   state.on_toggle_search = nil
   state.search_enabled = false
+  state.on_accept_edit = nil
+  state.on_reject_edit = nil
+  state.edit_pending = false
   state.content_start_line = 0
 end
 
@@ -193,6 +205,36 @@ setup_keymaps = function(bufnr)
     end
     if state.on_followup then
       state.on_followup()
+    end
+  end, opts)
+
+  -- Accept inline edit
+  vim.keymap.set("n", "a", function()
+    if not state.edit_pending then
+      return
+    end
+    if state.on_accept_edit then
+      state.on_accept_edit(false)
+    end
+  end, opts)
+
+  -- Accept inline edit and hide response window
+  vim.keymap.set("n", "A", function()
+    if not state.edit_pending then
+      return
+    end
+    if state.on_accept_edit then
+      state.on_accept_edit(true)
+    end
+  end, opts)
+
+  -- Reject inline edit
+  vim.keymap.set("n", "r", function()
+    if not state.edit_pending then
+      return
+    end
+    if state.on_reject_edit then
+      state.on_reject_edit()
     end
   end, opts)
 
@@ -439,6 +481,29 @@ end
 function M.set_search_enabled(enabled)
   state.search_enabled = enabled == true
   refresh_footer()
+end
+
+---Register inline edit accept/reject callbacks.
+---@param on_accept function|nil
+---@param on_reject function|nil
+function M.set_edit_actions(on_accept, on_reject)
+  state.on_accept_edit = on_accept
+  state.on_reject_edit = on_reject
+  state.edit_pending = (on_accept ~= nil) or (on_reject ~= nil)
+  refresh_footer()
+end
+
+---Clear inline edit accept/reject callbacks.
+function M.clear_edit_actions()
+  state.on_accept_edit = nil
+  state.on_reject_edit = nil
+  state.edit_pending = false
+  refresh_footer()
+end
+
+---Hide the response window while preserving buffer state.
+function M.hide()
+  hide_window()
 end
 
 ---Append a follow-up question header (separator + question) to the response buffer

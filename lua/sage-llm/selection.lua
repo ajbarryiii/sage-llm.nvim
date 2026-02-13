@@ -5,6 +5,7 @@
 ---@field end_line number End line (1-indexed)
 ---@field start_col number Start column (0-indexed)
 ---@field end_col number End column (0-indexed)
+---@field mode string Visual mode (`v`, `V`, or CTRL-V)
 ---@field filetype string Buffer filetype
 ---@field filepath string Relative file path
 
@@ -76,6 +77,7 @@ function M.get_visual_selection()
     end_line = end_line,
     start_col = start_col,
     end_col = end_col,
+    mode = mode,
     filetype = filetype ~= "" and filetype or "text",
     filepath = filepath ~= "" and filepath or "[buffer]",
   },

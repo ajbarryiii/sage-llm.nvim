@@ -18,6 +18,7 @@ Get concise explanations without leaving your editor.
 - 🩺 **LSP diagnostics** - Automatically includes error codes and messages
 - 📦 **Dependency detection** - Understands your project's dependencies (Rust, JS/TS, Python, Go)
 - 🌊 **Streaming responses** - See answers as they generate
+- ✍️ **Inline edits** - Replace selected code with AI edits (`:SageInfill`)
 - 🎯 **Concise explanations** - Focuses on the "why", not just the "fix"
 - 🔄 **Multiple models** - Switch between Claude, GPT-4, Gemini, etc.
 
@@ -87,6 +88,7 @@ The plugin doesn't set default keymaps. Add your own:
 vim.keymap.set("v", "<leader>sa", ":SageAsk<CR>", { desc = "Ask LLM about selection" })
 vim.keymap.set("v", "<leader>se", ":SageExplain<CR>", { desc = "Explain selection" })
 vim.keymap.set("v", "<leader>sx", ":SageFix<CR>", { desc = "Fix diagnostics" })
+vim.keymap.set("v", "<leader>sk", ":SageInfill<CR>", { desc = "Inline edit selection" })
 vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 ```
 
@@ -99,6 +101,7 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
    - `:SageAsk` - Opens input buffer for your question
    - `:SageExplain` - Explains the code immediately
    - `:SageFix` - Explains how to fix diagnostics
+   - `:SageInfill` - Generates inline replacement for selected code
 3. **Read the response** in the floating window
 4. Press `q` to hide, `y` to yank response, `f` to ask follow-up, `S` to toggle web search for the next query
 
@@ -109,6 +112,7 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | `:SageAsk` | Open input buffer to ask about visual selection |
 | `:SageExplain` | Explain what the selected code does |
 | `:SageFix` | Explain how to fix errors/warnings in selection |
+| `:SageInfill` | Generate and preview inline replacement for selection |
 | `:SageView` | Reopen latest hidden response window |
 | `:SageModel` | Open model picker to switch LLMs |
 | `:SageModelRemove` | Open model picker to remove a model |
@@ -130,6 +134,9 @@ When using `:SageAsk`:
 - **`q`** or `<Esc>` - Hide window (conversation stays available)
 - **`y`** - Yank response to clipboard
 - **`f`** - Ask a follow-up question
+- **`a`** - Apply pending inline edit
+- **`A`** - Apply pending inline edit and hide window
+- **`r`** - Reject pending inline edit
 - **`S`** - Toggle web search for the next query
 - **`<C-c>`** - Cancel streaming (if in progress)
 
@@ -175,6 +182,7 @@ require("sage-llm").setup({
     height = 5,    -- Lines
     border = "rounded",
     prompt = "Ask about this code: ",
+    infill_prompt = "Describe the edit:",
   },
   
   -- Dependency detection (opt-in for performance)
@@ -311,7 +319,6 @@ Install [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) in your Neovim 
 
 ## Roadmap
 
-- [ ] Code replacement actions (apply suggested fixes)
 - [ ] Custom actions (user-defined prompt templates)
 - [ ] `:checkhealth` integration
 

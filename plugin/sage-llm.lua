@@ -38,6 +38,14 @@ local function create_commands()
     desc = "Explain how to fix diagnostics in selection",
   })
 
+  -- :SageInfill - Inline edit selected code
+  vim.api.nvim_create_user_command("SageInfill", function()
+    require("sage-llm").infill()
+  end, {
+    range = true,
+    desc = "Inline edit visual selection",
+  })
+
   -- :SageView - Show latest hidden response window
   vim.api.nvim_create_user_command("SageView", function()
     require("sage-llm").show_conversation()
