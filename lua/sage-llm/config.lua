@@ -42,6 +42,7 @@ M.defaults = {
     height = 5,
     border = "rounded",
     prompt = "Ask about this code: ",
+    followup_prompt = "Follow-up question:",
   },
 
   detect_dependencies = false,
@@ -97,19 +98,19 @@ function M.setup(opts)
   if external then
     base = vim.tbl_deep_extend("force", base, external)
   elseif err then
-    vim.notify("sage-llm: " .. err, vim.log.levels.WARN)
+    vim.notify_once("sage-llm: " .. err, vim.log.levels.WARN)
   elseif not config_file.exists() then
     -- First run: create template config file
     local created, create_err = config_file.create_template()
     if created then
-      vim.notify(
+      vim.notify_once(
         "sage-llm: Created config file at "
           .. config_file.get_config_path()
           .. "\nEdit it to add your API key.",
         vim.log.levels.INFO
       )
     elseif create_err then
-      vim.notify("sage-llm: " .. create_err, vim.log.levels.WARN)
+      vim.notify_once("sage-llm: " .. create_err, vim.log.levels.WARN)
     end
   end
 
@@ -158,9 +159,74 @@ function M.set_model(model, persist)
   if persist ~= false then
     local ok, err = config_file.update("model", model)
     if not ok and err then
-      vim.notify("sage-llm: Failed to save model: " .. err, vim.log.levels.WARN)
+      vim.notify_once("sage-llm: Failed to save model: " .. err, vim.log.levels.WARN)
     end
   end
+end
+
+---Add a model to the picker list and persist to config file
+---@param model string
+---@param persist boolean|nil Whether to persist to config file (default: true)
+function M.add_model(model, persist)
+  if model == "" then
+    return
+  end
+
+  local exists = vim.tbl_contains(M.options.models, model)
+  if not exists then
+    table.insert(M.options.models, model)
+  end
+
+  -- Persist to config file by default
+  if persist ~= false then
+    local ok, err = config_file.update("models", M.options.models)
+    if not ok and err then
+      vim.notify_once("sage-llm: Failed to save models: " .. err, vim.log.levels.WARN)
+    end
+  end
+end
+
+---Remove a model from the picker list and persist to config file
+---@param model string
+---@param persist boolean|nil Whether to persist to config file (default: true)
+---@return boolean removed Whether the model was removed
+function M.remove_model(model, persist)
+  local idx = nil
+  for i, value in ipairs(M.options.models) do
+    if value == model then
+      idx = i
+      break
+    end
+  end
+
+  if not idx then
+    return false
+  end
+
+  if #M.options.models == 1 then
+    return false
+  end
+
+  table.remove(M.options.models, idx)
+
+  if M.options.model == model then
+    M.options.model = M.options.models[1]
+  end
+
+  -- Persist to config file by default
+  if persist ~= false then
+    local models_ok, models_err = config_file.update("models", M.options.models)
+    if not models_ok and models_err then
+      vim.notify_once("sage-llm: Failed to save models: " .. models_err, vim.log.levels.WARN)
+    end
+
+    local model_ok, model_err = config_file.update("model", M.options.model)
+    if not model_ok and model_err then
+      vim.notify_once("sage-llm: Failed to save model: " .. model_err, vim.log.levels.WARN)
+    end
+  end
+
+  return true
 end
 
 ---Get the path to the external config file

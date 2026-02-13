@@ -117,11 +117,27 @@ local function extract_message_content(data)
   return nil
 end
 
+---@param request_opts {search: boolean}|nil
+---@return string
+local function resolve_model_id(request_opts)
+  local model = config.options.model
+  if not request_opts or not request_opts.search then
+    return model
+  end
+
+  if model:match(":online$") then
+    return model
+  end
+
+  return model .. ":online"
+end
+
 ---Make a streaming chat completion request
 ---@param messages table[] Array of {role, content} messages
 ---@param callbacks SageStreamCallbacks
+---@param request_opts {search: boolean}|nil
 ---@return SageRequestHandle|nil handle, string|nil error
-function M.stream_chat(messages, callbacks)
+function M.stream_chat(messages, callbacks, request_opts)
   local api_key = config.get_api_key()
   if not api_key then
     if callbacks.on_error then
@@ -135,7 +151,7 @@ function M.stream_chat(messages, callbacks)
   local url = config.options.base_url .. "/chat/completions"
 
   local body = vim.json.encode({
-    model = config.options.model,
+    model = resolve_model_id(request_opts),
     messages = messages,
     stream = true,
   })
@@ -312,10 +328,27 @@ function M.stream_chat(messages, callbacks)
                 callbacks.on_token(full_content)
               end
             else
-              debug_log("stream fallback: no content found in body")
-              if callbacks.on_error then
-                callbacks.on_error("No content received from model. It may not support streaming.")
-              end
+              -- Strategy 3: retry without streaming. Some providers return
+              -- empty deltas AND an empty body when stream=true. Retrying
+              -- with stream=false often succeeds via a different code path
+              -- on the provider side.
+              debug_log("stream fallback: no content found in body, retrying without streaming")
+              M.chat(messages, function(content, err)
+                if cancelled then
+                  return
+                end
+                if content and callbacks.on_token then
+                  debug_log("stream fallback: non-streaming retry succeeded, length=" .. #content)
+                  callbacks.on_token(content)
+                  if callbacks.on_complete then
+                    callbacks.on_complete()
+                  end
+                elseif callbacks.on_error then
+                  debug_log("stream fallback: non-streaming retry failed: " .. tostring(err))
+                  callbacks.on_error(err or "No content received from model")
+                end
+              end, request_opts)
+              return -- Don't call on_complete here; the retry callback handles it
             end
           end
         end
@@ -342,8 +375,9 @@ end
 ---Make a non-streaming chat completion request (for simpler use cases)
 ---@param messages table[] Array of {role, content} messages
 ---@param callback function Called with (response_text, error)
+---@param request_opts {search: boolean}|nil
 ---@return SageRequestHandle|nil
-function M.chat(messages, callback)
+function M.chat(messages, callback, request_opts)
   local api_key = config.get_api_key()
   if not api_key then
     callback(nil, "No API key found. Set $OPENROUTER_API_KEY or configure api_key in setup()")
@@ -353,7 +387,7 @@ function M.chat(messages, callback)
   local url = config.options.base_url .. "/chat/completions"
 
   local body = vim.json.encode({
-    model = config.options.model,
+    model = resolve_model_id(request_opts),
     messages = messages,
     stream = false,
   })

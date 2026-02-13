@@ -100,7 +100,7 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
    - `:SageExplain` - Explains the code immediately
    - `:SageFix` - Explains how to fix diagnostics
 3. **Read the response** in the floating window
-4. Press `q` to close, `y` to yank response
+4. Press `q` to hide, `y` to yank response, `f` to ask follow-up, `S` to toggle web search for the next query
 
 ### Commands
 
@@ -109,7 +109,9 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | `:SageAsk` | Open input buffer to ask about visual selection |
 | `:SageExplain` | Explain what the selected code does |
 | `:SageFix` | Explain how to fix errors/warnings in selection |
+| `:SageView` | Reopen latest hidden response window |
 | `:SageModel` | Open model picker to switch LLMs |
+| `:SageModelRemove` | Open model picker to remove a model |
 | `:SageConfig` | Open config file for editing |
 | `:SageDepsOn` | Enable dependency detection (slower, more context) |
 | `:SageDepsOff` | Disable dependency detection (default) |
@@ -120,13 +122,18 @@ When using `:SageAsk`:
 - **Type your question** - Multi-line supported
 - **`<CR>`** - Submit question
 - **`<S-CR>`** (Shift+Enter) - Insert newline
+- **`S`** (normal mode) - Toggle web search for the next query
 - **`q`** or `<Esc>` - Cancel
 
 ### Response Window
 
-- **`q`** or `<Esc>` - Close window
+- **`q`** or `<Esc>` - Hide window (conversation stays available)
 - **`y`** - Yank response to clipboard
+- **`f`** - Ask a follow-up question
+- **`S`** - Toggle web search for the next query
 - **`<C-c>`** - Cancel streaming (if in progress)
+
+Web search is off by default. When enabled, the plugin sends `:online` model variants to OpenRouter (for example, `anthropic/claude-sonnet-4.5:online`). The toggle resets to off after each query.
 
 ## Configuration
 
@@ -152,7 +159,7 @@ You can override UI settings and prompts in your Neovim config:
 require("sage-llm").setup({
   -- API settings (config file takes precedence)
   api_key = nil,  -- Falls back to config file, then $OPENROUTER_API_KEY
-  model = "anthropic/claude-sonnet-4-20250514",
+  model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
   
   -- Response window (floating window on right side)
@@ -173,14 +180,17 @@ require("sage-llm").setup({
   -- Dependency detection (opt-in for performance)
   detect_dependencies = false,
   
-  -- Available models (shown in :SageModel picker)
-  models = {
-    "anthropic/claude-sonnet-4-20250514",
-    "anthropic/claude-3-5-haiku",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash",
-    "deepseek/deepseek-chat",
+  -- Currently configured models (shown in :SageModel picker)
+  models = {                                  
+    "openai/gpt-oss-20b",
+    "openai/gpt-5-nano",
+    "openai/gpt-5.2-codex",
+    "moonshotai/kimi-k2.5",
+    "google/gemini-3-flash-preview",
+    "anthropic/claude-sonnet-4.5",
+    "x-ai/grok-4.1-fast",
+    "anthropic/claude-opus-4.6",
+    "anthropic/claude-haiku-4.5",
   },
   
   -- System prompt (tuned for concise teaching)
@@ -244,15 +254,12 @@ The detected dependencies are included in the prompt so the LLM understands your
 
 ## Available Models
 
-Default: `anthropic/claude-sonnet-4-20250514`
+Default: `openai/gpt-oss-20b`
 
 Switch models with `:SageModel` or configure in `setup()`:
-- `anthropic/claude-sonnet-4-20250514` - Best for complex code explanations
-- `anthropic/claude-3-5-haiku` - Faster, cheaper, good for simple questions
-- `openai/gpt-4o` - Strong general coding knowledge
-- `openai/gpt-4o-mini` - Fast and cheap
-- `google/gemini-2.0-flash` - Free tier available
-- `deepseek/deepseek-chat` - Good for code, very cheap
+
+- `:SageModel` includes `Add custom model...` and `Remove model...` options so you can manage your picker list and persist changes to config.
+- `:SageModelRemove` jumps directly to the remove-model picker.
 
 See [OpenRouter pricing](https://openrouter.ai/models) for cost comparison.
 
@@ -304,7 +311,6 @@ Install [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) in your Neovim 
 
 ## Roadmap
 
-- [ ] Conversation history (multi-turn conversations)
 - [ ] Code replacement actions (apply suggested fixes)
 - [ ] Custom actions (user-defined prompt templates)
 - [ ] `:checkhealth` integration

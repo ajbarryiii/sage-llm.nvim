@@ -1,4 +1,5 @@
 local config = require("sage-llm.config")
+local conversation = require("sage-llm.conversation")
 
 local M = {}
 
@@ -8,6 +9,9 @@ local M = {}
 ---@field request_handle table|nil Handle to cancel in-flight request
 ---@field is_streaming boolean Whether currently streaming
 ---@field content_start_line number Line where response content starts (after code header)
+---@field on_followup function|nil Callback invoked when user presses 'f' to follow up
+---@field on_toggle_search fun(): boolean|nil Callback invoked when user presses 'S'
+---@field search_enabled boolean Whether web search is enabled for next query
 
 ---@type SageResponseState
 local state = {
@@ -16,12 +20,33 @@ local state = {
   request_handle = nil,
   is_streaming = false,
   content_start_line = 0,
+  on_followup = nil,
+  on_toggle_search = nil,
+  search_enabled = false,
 }
 
 -- Spinner frames for loading indicator
 local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 local spinner_index = 1
 local spinner_timer = nil
+local setup_keymaps
+
+---@return string
+local function footer_text()
+  local search_state = state.search_enabled and "on" or "off"
+  return " q hide | y yank | f follow-up | S search:" .. search_state .. " "
+end
+
+local function refresh_footer()
+  if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
+    return
+  end
+
+  local win_config = vim.api.nvim_win_get_config(state.winid)
+  win_config.footer = footer_text()
+  win_config.footer_pos = "center"
+  pcall(vim.api.nvim_win_set_config, state.winid, win_config)
+end
 
 ---Stop the loading spinner
 local function stop_spinner()
@@ -31,8 +56,55 @@ local function stop_spinner()
   end
 end
 
----Close the response window
-local function close_window()
+---Create or recreate the response window for an existing buffer
+---@param bufnr number
+---@return number|nil winid
+local function open_window(bufnr)
+  local ui_config = config.options.response
+
+  -- Calculate window dimensions
+  local editor_width = vim.o.columns
+  local editor_height = vim.o.lines
+
+  local width = math.floor(editor_width * ui_config.width)
+  local height = math.floor(editor_height * ui_config.height)
+
+  -- Position: centered vertically, right side of screen
+  local row = math.floor((editor_height - height) / 2)
+  local col = editor_width - width - 2 -- 2 for border/padding
+
+  -- Get just the model name (after the slash)
+  local model_name = config.options.model:match("[^/]+$") or config.options.model
+
+  -- Create window
+  local winid = vim.api.nvim_open_win(bufnr, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = ui_config.border,
+    title = " sage-llm (" .. model_name .. ") ",
+    title_pos = "center",
+    footer = footer_text(),
+    footer_pos = "center",
+  })
+
+  -- Set window options
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].cursorline = false
+  vim.wo[winid].conceallevel = 2
+
+  -- Set up keymaps
+  setup_keymaps(bufnr)
+
+  return winid
+end
+
+---Hide the response window, preserving buffer and conversation state
+local function hide_window()
   stop_spinner()
 
   -- Cancel any in-flight request
@@ -43,14 +115,27 @@ local function close_window()
   if state.winid and vim.api.nvim_win_is_valid(state.winid) then
     vim.api.nvim_win_close(state.winid, true)
   end
+
+  state.winid = nil
+  state.request_handle = nil
+  state.is_streaming = false
+end
+
+---Clear all response UI state and reset conversation history
+local function clear_state()
+  hide_window()
+
   if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
     vim.api.nvim_buf_delete(state.bufnr, { force = true })
   end
 
-  state.winid = nil
+  conversation.reset()
+
   state.bufnr = nil
-  state.request_handle = nil
-  state.is_streaming = false
+  state.on_followup = nil
+  state.on_toggle_search = nil
+  state.search_enabled = false
+  state.content_start_line = 0
 end
 
 ---Get full response text (excluding code header)
@@ -90,22 +175,49 @@ end
 
 ---Set up buffer keymaps
 ---@param bufnr number
-local function setup_keymaps(bufnr)
+setup_keymaps = function(bufnr)
   local opts = { buffer = bufnr, noremap = true, silent = true }
 
   -- Close window
-  vim.keymap.set("n", "q", close_window, opts)
-  vim.keymap.set("n", "<Esc>", close_window, opts)
+  vim.keymap.set("n", "q", hide_window, opts)
+  vim.keymap.set("n", "<Esc>", hide_window, opts)
 
   -- Yank response
   vim.keymap.set("n", "y", yank_response, opts)
+
+  -- Follow-up question
+  vim.keymap.set("n", "f", function()
+    if state.is_streaming then
+      vim.notify("sage-llm: Wait for response to complete", vim.log.levels.WARN)
+      return
+    end
+    if state.on_followup then
+      state.on_followup()
+    end
+  end, opts)
+
+  -- Toggle web search for next query
+  vim.keymap.set("n", "S", function()
+    local enabled = nil
+    if state.on_toggle_search then
+      enabled = state.on_toggle_search()
+    end
+
+    if type(enabled) == "boolean" then
+      state.search_enabled = enabled
+    else
+      state.search_enabled = not state.search_enabled
+    end
+
+    refresh_footer()
+  end, opts)
 
   -- Cancel streaming
   vim.keymap.set("n", "<C-c>", function()
     if state.is_streaming then
       cancel_stream()
     else
-      close_window()
+      hide_window()
     end
   end, opts)
 end
@@ -156,55 +268,17 @@ end
 ---@param code_header string The formatted code to show at top
 ---@return boolean success
 function M.open(code_header)
-  -- Close existing window if open
-  close_window()
-
-  local ui_config = config.options.response
-
-  -- Calculate window dimensions
-  local editor_width = vim.o.columns
-  local editor_height = vim.o.lines
-
-  local width = math.floor(editor_width * ui_config.width)
-  local height = math.floor(editor_height * ui_config.height)
-
-  -- Position: centered vertically, right side of screen
-  local row = math.floor((editor_height - height) / 2)
-  local col = editor_width - width - 2 -- 2 for border/padding
+  -- Clear any previous response window and buffer before opening a fresh one
+  clear_state()
 
   -- Create buffer
   state.bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[state.bufnr].buftype = "nofile"
-  vim.bo[state.bufnr].bufhidden = "wipe"
+  vim.bo[state.bufnr].bufhidden = "hide"
   vim.bo[state.bufnr].modifiable = true
   vim.bo[state.bufnr].filetype = "markdown"
 
-  -- Get just the model name (after the slash)
-  local model_name = config.options.model:match("[^/]+$") or config.options.model
-
-  -- Create window
-  state.winid = vim.api.nvim_open_win(state.bufnr, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = ui_config.border,
-    title = " sage-llm (" .. model_name .. ") ",
-    title_pos = "center",
-    footer = " q close | y yank ",
-    footer_pos = "center",
-  })
-
-  -- Set window options
-  vim.wo[state.winid].wrap = true
-  vim.wo[state.winid].linebreak = true
-  vim.wo[state.winid].cursorline = false
-  vim.wo[state.winid].conceallevel = 2
-
-  -- Set up keymaps
-  setup_keymaps(state.bufnr)
+  state.winid = open_window(state.bufnr)
 
   -- Add code header
   local header_lines = vim.split(code_header, "\n")
@@ -214,6 +288,22 @@ function M.open(code_header)
   state.content_start_line = #header_lines
 
   return true
+end
+
+---Show the most recent response window if hidden
+---@return boolean success
+function M.show()
+  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+    return true
+  end
+
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    state.bufnr = nil
+    return false
+  end
+
+  state.winid = open_window(state.bufnr)
+  return state.winid ~= nil
 end
 
 ---Show loading indicator
@@ -299,38 +389,6 @@ function M.complete()
   vim.cmd("stopinsert")
 end
 
----Set the complete response text at once (non-streaming)
----@param text string The complete response text
-function M.set_response(text)
-  stop_spinner()
-  state.is_streaming = false
-
-  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
-    return
-  end
-
-  -- Remove loading line if present
-  local line_count = vim.api.nvim_buf_line_count(state.bufnr)
-  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1]
-    or ""
-
-  if last_line:match("Thinking") then
-    vim.api.nvim_buf_set_lines(state.bufnr, line_count - 1, line_count, false, {})
-  end
-
-  -- Add the complete response
-  local response_lines = vim.split(text, "\n", { plain = true })
-  vim.api.nvim_buf_set_lines(state.bufnr, -1, -1, false, response_lines)
-
-  -- Scroll to top of response
-  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
-    vim.api.nvim_win_set_cursor(state.winid, { state.content_start_line + 1, 0 })
-  end
-
-  -- Switch to normal mode
-  vim.cmd("stopinsert")
-end
-
 ---Show an error message
 ---@param message string
 function M.show_error(message)
@@ -364,15 +422,70 @@ function M.set_request_handle(handle)
   state.request_handle = handle
 end
 
+---Set the callback for when the user presses 'f' to ask a follow-up
+---@param callback function|nil
+function M.set_on_followup(callback)
+  state.on_followup = callback
+end
+
+---Set the callback for when the user presses 'S' to toggle web search
+---@param callback fun(): boolean|nil
+function M.set_on_toggle_search(callback)
+  state.on_toggle_search = callback
+end
+
+---Set whether web search is enabled for the next query
+---@param enabled boolean
+function M.set_search_enabled(enabled)
+  state.search_enabled = enabled == true
+  refresh_footer()
+end
+
+---Append a follow-up question header (separator + question) to the response buffer
+---@param header_text string Formatted follow-up header text
+function M.append_followup_header(header_text)
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return
+  end
+
+  local header_lines = vim.split(header_text, "\n")
+  vim.api.nvim_buf_set_lines(state.bufnr, -1, -1, false, header_lines)
+
+  -- Update content_start_line so loading/streaming appends after the new header
+  state.content_start_line = vim.api.nvim_buf_line_count(state.bufnr)
+
+  -- Auto-scroll to bottom
+  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+    local line_count = vim.api.nvim_buf_line_count(state.bufnr)
+    vim.api.nvim_win_set_cursor(state.winid, { line_count, 0 })
+  end
+end
+
 ---Check if response window is currently open
 ---@return boolean
 function M.is_open()
   return state.winid ~= nil and vim.api.nvim_win_is_valid(state.winid)
 end
 
----Close the response window (public API)
-function M.close()
-  close_window()
+---Get the response window's position and dimensions (for positioning related windows)
+---@return {row: number, col: number, width: number, height: number}|nil
+function M.get_geometry()
+  if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
+    return nil
+  end
+  local win_config = vim.api.nvim_win_get_config(state.winid)
+  return {
+    row = win_config.row,
+    col = win_config.col,
+    width = win_config.width,
+    height = win_config.height,
+  }
+end
+
+---Check if currently streaming a response
+---@return boolean
+function M.is_streaming()
+  return state.is_streaming
 end
 
 return M

@@ -91,8 +91,8 @@ function M.create_template()
 
   -- Create directory if it doesn't exist
   if vim.fn.isdirectory(dir) == 0 then
-    local mkdir_ok = vim.fn.mkdir(dir, "p")
-    if mkdir_ok == 0 then
+    local ok, mkdir_ok = pcall(vim.fn.mkdir, dir, "p")
+    if not ok or mkdir_ok == 0 then
       return false, "Failed to create directory: " .. dir
     end
   end
@@ -154,8 +154,8 @@ function M.save(config)
 
   -- Create directory if it doesn't exist
   if vim.fn.isdirectory(dir) == 0 then
-    local mkdir_ok = vim.fn.mkdir(dir, "p")
-    if mkdir_ok == 0 then
+    local ok, mkdir_ok = pcall(vim.fn.mkdir, dir, "p")
+    if not ok or mkdir_ok == 0 then
       return false, "Failed to create directory: " .. dir
     end
   end

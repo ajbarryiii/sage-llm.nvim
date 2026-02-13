@@ -38,11 +38,25 @@ local function create_commands()
     desc = "Explain how to fix diagnostics in selection",
   })
 
+  -- :SageView - Show latest hidden response window
+  vim.api.nvim_create_user_command("SageView", function()
+    require("sage-llm").show_conversation()
+  end, {
+    desc = "View the current sage-llm conversation",
+  })
+
   -- :SageModel - Open model picker
   vim.api.nvim_create_user_command("SageModel", function()
     require("sage-llm").select_model()
   end, {
     desc = "Select LLM model",
+  })
+
+  -- :SageModelRemove - Open model removal picker
+  vim.api.nvim_create_user_command("SageModelRemove", function()
+    require("sage-llm").remove_model()
+  end, {
+    desc = "Remove model from picker",
   })
 
   -- :SageDepsOn - Enable dependency detection

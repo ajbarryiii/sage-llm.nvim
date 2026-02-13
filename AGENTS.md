@@ -16,10 +16,11 @@ This plugin is designed for developers learning new languages or debugging synta
 
 ```
 lua/sage-llm/
-├── init.lua           # Public API: setup(), ask(), explain(), fix(), select_model()
+├── init.lua           # Public API: setup(), ask(), explain(), fix(), followup(), select_model()
 ├── config.lua         # Configuration management, defaults, validation
 ├── config_file.lua    # External config file loading/saving (~/.config/sage-llm/config.lua)
 ├── api.lua            # OpenRouter HTTP client, SSE streaming
+├── conversation.lua   # Multi-turn conversation state management
 ├── selection.lua      # Visual selection extraction
 ├── diagnostics.lua    # LSP diagnostics gathering (vim.diagnostic.get)
 ├── context.lua        # File metadata, dependency detection (Cargo.toml, etc.)
@@ -39,7 +40,7 @@ plugin/
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Query mode | Stateless | Each query is independent, no conversation history |
+| Query mode | Conversational | Follow-up questions via `f` keymap in response window; `q` hides and `:SageView` restores latest conversation |
 | Response style | Concise | Prefer `inline code` over full code blocks |
 | Code replacement | Not supported | Read-only explanations, no buffer modifications |
 | Context scope | Selection only | No surrounding code included |
@@ -47,7 +48,7 @@ plugin/
 | Default keymaps | None | User must configure their own |
 | LLM Provider | OpenRouter | Bring your own API key via config file or `$OPENROUTER_API_KEY` |
 | Config file | `~/.config/sage-llm/config.lua` | XDG-compliant, auto-created on first run |
-| Default model | anthropic/claude-sonnet-4-20250514 | Good balance of quality/speed for code explanation |
+| Default model | openai/gpt-oss-20b | User can configure in config file |
 
 ## User Commands
 
@@ -56,7 +57,9 @@ plugin/
 | `:SageAsk` | Visual mode: open input buffer, ask about selection |
 | `:SageExplain` | Visual mode: explain selected code (no prompt) |
 | `:SageFix` | Visual mode: explain how to fix diagnostics |
+| `:SageView` | Reopen latest hidden conversation window |
 | `:SageModel` | Open model picker |
+| `:SageModelRemove` | Open remove-model picker |
 | `:SageDepsOn` | Enable dependency detection for session |
 | `:SageDepsOff` | Disable dependency detection |
 | `:SageConfig` | Open config file for editing |
@@ -105,7 +108,8 @@ Configuration values are resolved in this order (highest to lowest):
 4. User types question, submits
 5. Response window opens (centered, right side of screen)
 6. Shows selected code, loading indicator, then streams response
-7. User presses `q` to close or `y` to yank response
+7. User presses `f` to ask a follow-up question (opens input buffer, appends to conversation)
+8. User presses `q` to hide (conversation persists), `:SageView` to reopen, or `y` to yank response
 
 ## Prompt Structure
 
@@ -145,6 +149,7 @@ Question: {user_question}
     height = 5,                               -- Lines
     border = "rounded",
     prompt = "Ask about this code: ",
+    followup_prompt = "Follow-up question:",   -- Prompt for follow-up input
   },
   
   detect_dependencies = false,                -- Toggle with :SageDepsOn/Off
@@ -219,13 +224,24 @@ Dependency detection strategies by filetype:
 
 Only run when `detect_dependencies = true` (set via `:SageDepsOn`).
 
+### Conversation (conversation.lua)
+
+- Pure state machine with no UI dependencies (fully testable with busted)
+- Stores: messages array, active flag, token accumulator
+- `start(messages)` - Initialize new conversation from initial API messages
+- `accumulate_token(token)` / `finish_response()` - Build assistant response from streaming tokens
+- `add_followup(question)` - Append user message, return full messages array for API
+- `remove_last_user_message()` - Error recovery: remove failed follow-up so user can retry
+- `reset()` - Clear all state (called when starting a new `:SageAsk`/`:SageExplain`/`:SageFix`)
+- Conversation resets on: new `:SageAsk`/`:SageExplain`/`:SageFix`
+
 ### UI Response Window (ui/response.lua)
 
 - Position: centered vertically, right side of screen
 - Show selected code first (in fenced code block)
 - Show loading indicator: `"Thinking..."` with spinner
 - Stream tokens by appending to buffer
-- Keymaps: `q`/`<Esc>` close, `y` yank, `<C-c>` cancel stream
+- Keymaps: `q`/`<Esc>` hide, `y` yank, `f` follow-up, `<C-c>` cancel stream
 
 ### UI Input Window (ui/input.lua)
 

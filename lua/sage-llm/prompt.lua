@@ -101,4 +101,18 @@ function M.format_question_header(question)
   return table.concat(lines, "\n")
 end
 
+---Format follow-up question header for display in the response window
+---Shows a separator and the follow-up question
+---@param question string
+---@return string
+function M.format_followup_header(question)
+  local lines = {}
+  table.insert(lines, "")
+  table.insert(lines, "---")
+  table.insert(lines, "")
+  table.insert(lines, "**Follow-up:** " .. question)
+  table.insert(lines, "")
+  return table.concat(lines, "\n")
+end
+
 return M

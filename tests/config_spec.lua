@@ -109,6 +109,51 @@ describe("config", function()
     end)
   end)
 
+  describe("add_model", function()
+    it("adds a new model to the picker list", function()
+      config.setup({ models = { "openai/gpt-oss-20b" } })
+      config.add_model("openai/gpt-5.3-codex", false)
+
+      assert.same({ "openai/gpt-oss-20b", "openai/gpt-5.3-codex" }, config.options.models)
+    end)
+
+    it("does not duplicate an existing model", function()
+      config.setup({ models = { "openai/gpt-oss-20b" } })
+      config.add_model("openai/gpt-oss-20b", false)
+
+      assert.same({ "openai/gpt-oss-20b" }, config.options.models)
+    end)
+  end)
+
+  describe("remove_model", function()
+    it("removes a model from the picker list", function()
+      config.setup({ models = { "a", "b" }, model = "a" })
+      local removed = config.remove_model("b", false)
+
+      assert.is_true(removed)
+      assert.same({ "a" }, config.options.models)
+      assert.equals("a", config.options.model)
+    end)
+
+    it("switches current model when removing the selected one", function()
+      config.setup({ models = { "a", "b", "c" }, model = "b" })
+      local removed = config.remove_model("b", false)
+
+      assert.is_true(removed)
+      assert.same({ "a", "c" }, config.options.models)
+      assert.equals("a", config.options.model)
+    end)
+
+    it("refuses to remove the last remaining model", function()
+      config.setup({ models = { "a" }, model = "a" })
+      local removed = config.remove_model("a", false)
+
+      assert.is_false(removed)
+      assert.same({ "a" }, config.options.models)
+      assert.equals("a", config.options.model)
+    end)
+  end)
+
   describe("get_config_path", function()
     it("returns the config file path", function()
       local path = config.get_config_path()

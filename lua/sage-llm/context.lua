@@ -166,11 +166,11 @@ end
 
 ---Detect dependencies based on filetype
 ---@param bufnr number Buffer number
----@return string[]|nil dependencies, string|nil manifest_type
+---@return string[]|nil dependencies
 function M.detect_dependencies(bufnr)
   local filepath = vim.api.nvim_buf_get_name(bufnr)
   if filepath == "" then
-    return nil, nil
+    return nil
   end
 
   local dir = vim.fn.fnamemodify(filepath, ":h")
@@ -193,7 +193,7 @@ function M.detect_dependencies(bufnr)
 
   local strategy = strategies[ft]
   if not strategy then
-    return nil, nil
+    return nil
   end
 
   -- Handle single strategy or array of fallbacks
@@ -204,12 +204,12 @@ function M.detect_dependencies(bufnr)
     if manifest then
       local deps = attempt.parser(manifest)
       if #deps > 0 then
-        return deps, attempt.file
+        return deps
       end
     end
   end
 
-  return nil, nil
+  return nil
 end
 
 ---Format dependencies for inclusion in prompt
