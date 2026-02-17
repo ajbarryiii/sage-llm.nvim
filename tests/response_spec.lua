@@ -40,4 +40,16 @@ describe("response window hide behavior", function()
     assert.is_true(response.show())
     assert.is_true(response.is_open())
   end)
+
+  it("adds a blank line before and after streamed llm response", function()
+    response.open("Header")
+    response.show_loading()
+    response.start_streaming()
+    response.append_token("Response line 1")
+    response.complete()
+
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+
+    assert.same({ "Header", "", "Response line 1", "" }, lines)
+  end)
 end)

@@ -2,6 +2,13 @@
 
 ## Instructions
 
+Have basic common sense. For instance:
+*   **Example** If the user asks for auth, make sure it is secure, 
+*   **Security First:** Never hardcode secrets or API keys; use environment variables. Always use parameterized queries for database interactions to prevent SQL injection.
+*   **Authn vs. Authz:** After implementing login (authentication), ensure every protected route checks if the specific user has the permission (authorization) to access that data.
+*   **Production Hardening:** Ensure all error handling replaces verbose stack traces with generic messages for the client. Implement rate limiting on all public POST/PUT endpoints.
+*   **Cryptographic Standards:** Use `crypto.randomBytes` (or equivalent) for tokens/IDs and `bcrypt` for password hashing; never use `Math.random()` or plain text for sensitive data.
+
 Use scratchpad.txt as a scratchpad for persistent memory, and a place to reason through problems. 
 
 ## Project Overview

@@ -67,10 +67,14 @@ end
 ---@param selection SageSelection
 ---@return string
 function M.format_code_header(selection)
+  local lines_copied = selection.end_line - selection.start_line + 1
+  local line_label = "lines"
+  if lines_copied == 1 then
+    line_label = "line"
+  end
+
   local lines = {}
-  table.insert(lines, string.format("```%s", selection.filetype))
-  table.insert(lines, selection.text)
-  table.insert(lines, "```")
+  table.insert(lines, string.format("[%d %s copied]", lines_copied, line_label))
   table.insert(lines, "")
   return table.concat(lines, "\n")
 end

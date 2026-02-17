@@ -15,6 +15,7 @@ local M = {}
 ---@field on_accept_edit function|nil Callback invoked when user presses 'a'
 ---@field on_reject_edit function|nil Callback invoked when user presses 'r'
 ---@field edit_pending boolean Whether an inline edit is waiting for accept/reject
+---@field awaiting_response_text boolean Whether next token should be separated
 
 ---@type SageResponseState
 local state = {
@@ -29,6 +30,7 @@ local state = {
   on_accept_edit = nil,
   on_reject_edit = nil,
   edit_pending = false,
+  awaiting_response_text = false,
 }
 
 -- Spinner frames for loading indicator
@@ -36,6 +38,10 @@ local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧",
 local spinner_index = 1
 local spinner_timer = nil
 local setup_keymaps
+
+local function is_blank_line(line)
+  return (line or ""):match("^%s*$") ~= nil
+end
 
 ---@return string
 local function footer_text()
@@ -148,6 +154,7 @@ local function clear_state()
   state.on_reject_edit = nil
   state.edit_pending = false
   state.content_start_line = 0
+  state.awaiting_response_text = false
 end
 
 ---Get full response text (excluding code header)
@@ -328,6 +335,7 @@ function M.open(code_header)
 
   -- Track where response content starts
   state.content_start_line = #header_lines
+  state.awaiting_response_text = true
 
   return true
 end
@@ -378,6 +386,12 @@ function M.start_streaming()
   if last_line:match("Thinking") then
     vim.api.nvim_buf_set_lines(state.bufnr, line_count - 1, line_count, false, {})
   end
+
+  local trimmed_count = vim.api.nvim_buf_line_count(state.bufnr)
+  local before_last = vim.api.nvim_buf_get_lines(state.bufnr, trimmed_count - 1, trimmed_count, false)[1] or ""
+  if not is_blank_line(before_last) then
+    vim.api.nvim_buf_set_lines(state.bufnr, trimmed_count, trimmed_count, false, { "" })
+  end
 end
 
 ---Append a token to the response
@@ -387,10 +401,19 @@ function M.append_token(token)
     return
   end
 
-  -- Get current content
   local line_count = vim.api.nvim_buf_line_count(state.bufnr)
-  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1]
-    or ""
+  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1] or ""
+
+  if state.awaiting_response_text then
+    if is_blank_line(last_line) then
+      line_count = line_count + 1
+    else
+      vim.api.nvim_buf_set_lines(state.bufnr, line_count, line_count, false, { "" })
+      line_count = line_count + 1
+    end
+    last_line = ""
+    state.awaiting_response_text = false
+  end
 
   -- Handle newlines in token
   local lines = vim.split(token, "\n", { plain = true })
@@ -426,6 +449,19 @@ function M.complete()
   stop_spinner()
   state.is_streaming = false
   state.request_handle = nil
+
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    vim.cmd("stopinsert")
+    return
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(state.bufnr)
+  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1] or ""
+  if not is_blank_line(last_line) then
+    vim.api.nvim_buf_set_lines(state.bufnr, line_count, line_count, false, { "" })
+  end
+
+  state.awaiting_response_text = false
 
   -- Switch to normal mode
   vim.cmd("stopinsert")
@@ -518,6 +554,7 @@ function M.append_followup_header(header_text)
 
   -- Update content_start_line so loading/streaming appends after the new header
   state.content_start_line = vim.api.nvim_buf_line_count(state.bufnr)
+  state.awaiting_response_text = true
 
   -- Auto-scroll to bottom
   if state.winid and vim.api.nvim_win_is_valid(state.winid) then
