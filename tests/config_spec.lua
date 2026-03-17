@@ -33,6 +33,14 @@ describe("config", function()
       assert.is_false(config.defaults.detect_dependencies)
     end)
 
+    it("has rag disabled by default", function()
+      assert.is_false(config.defaults.rag.enabled)
+    end)
+
+    it("has rag embedding model", function()
+      assert.equals("openai/text-embedding-3-small", config.defaults.rag.embedding_model)
+    end)
+
     it("has response config", function()
       assert.equals(0.6, config.defaults.response.width)
       assert.equals(0.4, config.defaults.response.height)
@@ -69,6 +77,17 @@ describe("config", function()
       config.setup(nil)
       assert.equals(config.defaults.model, config.options.model)
     end)
+
+    it("validates rag chunk overlap", function()
+      assert.has_error(function()
+        config.setup({
+          rag = {
+            chunk_lines = 20,
+            chunk_overlap = 20,
+          },
+        })
+      end)
+    end)
   end)
 
   describe("get_api_key", function()
@@ -98,6 +117,20 @@ describe("config", function()
       config.setup({ detect_dependencies = true })
       config.set_detect_dependencies(false)
       assert.is_false(config.options.detect_dependencies)
+    end)
+  end)
+
+  describe("set_rag_enabled", function()
+    it("enables rag retrieval", function()
+      config.setup({})
+      config.set_rag_enabled(true)
+      assert.is_true(config.options.rag.enabled)
+    end)
+
+    it("disables rag retrieval", function()
+      config.setup({ rag = { enabled = true } })
+      config.set_rag_enabled(false)
+      assert.is_false(config.options.rag.enabled)
     end)
   end)
 

@@ -5,6 +5,7 @@
 ---@field response SageResponseConfig Response window configuration
 ---@field input SageInputConfig Input window configuration
 ---@field detect_dependencies boolean Whether to detect and include dependencies
+---@field rag SageRagConfig RAG code search configuration
 ---@field models string[] Available models for picker
 ---@field system_prompt string System prompt for the LLM (with code selection)
 ---@field system_prompt_no_selection string System prompt for the LLM (without code selection)
@@ -21,6 +22,21 @@
 ---@field height number Height in lines
 ---@field border string Border style
 ---@field prompt string Prompt text shown in title
+
+---@class SageRagConfig
+---@field enabled boolean Enable semantic repository context retrieval for :SageAsk
+---@field embedding_model string Embedding model used for indexing and search
+---@field top_k number Maximum number of retrieved snippets to include
+---@field chunk_lines number Number of lines per indexed chunk
+---@field chunk_overlap number Overlap lines between chunks
+---@field embed_batch_size number Number of chunks per embeddings request
+---@field max_context_chars number Maximum total retrieved context characters
+---@field max_file_size_kb number Maximum file size (KB) to index
+---@field max_chunks_per_file number Maximum snippets per file in retrieval results
+---@field min_similarity number Minimum cosine similarity threshold
+---@field include string[] Glob patterns for files to include in index
+---@field exclude string[] Glob patterns for files to exclude from index
+---@field index_dir string|nil Optional custom directory for persisted index cache
 
 local config_file = require("sage-llm.config_file")
 
@@ -48,6 +64,64 @@ M.defaults = {
   },
 
   detect_dependencies = false,
+  rag = {
+    enabled = false,
+    embedding_model = "openai/text-embedding-3-small",
+    top_k = 6,
+    chunk_lines = 80,
+    chunk_overlap = 20,
+    embed_batch_size = 32,
+    max_context_chars = 6000,
+    max_file_size_kb = 256,
+    max_chunks_per_file = 2,
+    min_similarity = 0.2,
+    include = {
+      "**/*.lua",
+      "**/*.md",
+      "**/*.txt",
+      "**/*.vim",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.json",
+      "**/*.toml",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/*.py",
+      "**/*.go",
+      "**/*.rs",
+      "**/*.c",
+      "**/*.h",
+      "**/*.cpp",
+      "**/*.hpp",
+      "**/*.java",
+      "**/*.rb",
+      "**/*.sh",
+    },
+    exclude = {
+      ".git/**",
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      "target/**",
+      ".next/**",
+      ".venv/**",
+      "vendor/**",
+      "**/*.lock",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.jpeg",
+      "**/*.gif",
+      "**/*.webp",
+      "**/*.pdf",
+      "**/*.zip",
+      "**/*.gz",
+      "**/*.sqlite",
+      "**/*.db",
+    },
+    index_dir = nil,
+  },
   debug = false,
 
   models = {
@@ -132,6 +206,10 @@ end
 
 ---Validate configuration
 function M.validate()
+  if type(M.options.rag) ~= "table" then
+    error("sage-llm: rag config must be a table")
+  end
+
   vim.validate({
     model = { M.options.model, "string" },
     base_url = { M.options.base_url, "string" },
@@ -140,12 +218,56 @@ function M.validate()
     ["input.width"] = { M.options.input.width, "number" },
     ["input.height"] = { M.options.input.height, "number" },
     detect_dependencies = { M.options.detect_dependencies, "boolean" },
+    ["rag.enabled"] = { M.options.rag.enabled, "boolean" },
+    ["rag.embedding_model"] = { M.options.rag.embedding_model, "string" },
+    ["rag.top_k"] = { M.options.rag.top_k, "number" },
+    ["rag.chunk_lines"] = { M.options.rag.chunk_lines, "number" },
+    ["rag.chunk_overlap"] = { M.options.rag.chunk_overlap, "number" },
+    ["rag.embed_batch_size"] = { M.options.rag.embed_batch_size, "number" },
+    ["rag.max_context_chars"] = { M.options.rag.max_context_chars, "number" },
+    ["rag.max_file_size_kb"] = { M.options.rag.max_file_size_kb, "number" },
+    ["rag.max_chunks_per_file"] = { M.options.rag.max_chunks_per_file, "number" },
+    ["rag.min_similarity"] = { M.options.rag.min_similarity, "number" },
+    ["rag.include"] = { M.options.rag.include, "table" },
+    ["rag.exclude"] = { M.options.rag.exclude, "table" },
     debug = { M.options.debug, "boolean" },
     models = { M.options.models, "table" },
     system_prompt = { M.options.system_prompt, "string" },
     system_prompt_no_selection = { M.options.system_prompt_no_selection, "string" },
     system_prompt_infill = { M.options.system_prompt_infill, "string" },
   })
+
+  if M.options.rag.chunk_overlap >= M.options.rag.chunk_lines then
+    error("sage-llm: rag.chunk_overlap must be smaller than rag.chunk_lines")
+  end
+
+  if M.options.rag.top_k < 1 then
+    error("sage-llm: rag.top_k must be >= 1")
+  end
+
+  if M.options.rag.chunk_lines < 1 then
+    error("sage-llm: rag.chunk_lines must be >= 1")
+  end
+
+  if M.options.rag.chunk_overlap < 0 then
+    error("sage-llm: rag.chunk_overlap must be >= 0")
+  end
+
+  if M.options.rag.embed_batch_size < 1 then
+    error("sage-llm: rag.embed_batch_size must be >= 1")
+  end
+
+  if M.options.rag.max_context_chars < 1 then
+    error("sage-llm: rag.max_context_chars must be >= 1")
+  end
+
+  if M.options.rag.max_file_size_kb < 1 then
+    error("sage-llm: rag.max_file_size_kb must be >= 1")
+  end
+
+  if M.options.rag.max_chunks_per_file < 1 then
+    error("sage-llm: rag.max_chunks_per_file must be >= 1")
+  end
 end
 
 ---Get the API key from config or environment
@@ -158,6 +280,12 @@ end
 ---@param enabled boolean
 function M.set_detect_dependencies(enabled)
   M.options.detect_dependencies = enabled
+end
+
+---Set RAG retrieval on/off
+---@param enabled boolean
+function M.set_rag_enabled(enabled)
+  M.options.rag.enabled = enabled
 end
 
 ---Set the current model and persist to config file

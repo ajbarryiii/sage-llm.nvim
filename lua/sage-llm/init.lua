@@ -14,6 +14,7 @@ local actions = require("sage-llm.actions")
 local models = require("sage-llm.models")
 local conversation = require("sage-llm.conversation")
 local infill = require("sage-llm.infill")
+local rag = require("sage-llm.rag")
 
 local M = {}
 
@@ -128,8 +129,10 @@ end
 ---Execute a query with the given question (with code selection)
 ---@param sel SageSelection
 ---@param question string
-local function execute_query(sel, question)
-  local opts = consume_request_opts()
+---@param opts {use_rag: boolean}|nil
+local function execute_query(sel, question, opts)
+  opts = opts or { use_rag = false }
+  local request = consume_request_opts()
 
   -- Build the code header for display
   local code_header = prompt.format_code_header(sel)
@@ -138,28 +141,56 @@ local function execute_query(sel, question)
   ui.response.open(code_header)
   ui.response.show_loading()
 
-  -- Build messages for API
-  local messages = prompt.build_messages(sel, question)
+  local function submit_chat(rag_snippets)
+    local messages = prompt.build_messages(sel, question, {
+      rag_snippets = rag_snippets,
+    })
 
-  -- Start conversation tracking
-  conversation.start(messages)
+    -- Start conversation tracking
+    conversation.start(messages)
 
-  -- Set up follow-up callback
-  setup_followup_callback()
+    -- Set up follow-up callback
+    setup_followup_callback()
 
-  if config.options.debug then
-    vim.schedule(function()
-      vim.notify("sage-llm: execute_query using stream_chat", vim.log.levels.INFO)
-    end)
+    if config.options.debug then
+      vim.schedule(function()
+        vim.notify("sage-llm: execute_query using stream_chat", vim.log.levels.INFO)
+      end)
+    end
+
+    stream_response(messages, nil, request)
   end
 
-  stream_response(messages, nil, opts)
+  if not opts.use_rag then
+    submit_chat(nil)
+    return
+  end
+
+  local retrieval_handle = rag.retrieve_context({
+    question = question,
+    bufnr = sel.bufnr,
+    selection = sel,
+  }, function(results, err)
+    if err then
+      vim.notify(
+        "sage-llm: RAG retrieval failed; continuing without repository context (" .. err .. ")",
+        vim.log.levels.WARN
+      )
+    end
+    submit_chat(results)
+  end)
+
+  if retrieval_handle then
+    ui.response.set_request_handle(retrieval_handle)
+  end
 end
 
 ---Execute a simple query without code selection
 ---@param question string
-local function execute_simple_query(question)
-  local opts = consume_request_opts()
+---@param opts {use_rag: boolean}|nil
+local function execute_simple_query(question, opts)
+  opts = opts or { use_rag = false }
+  local request = consume_request_opts()
 
   -- Build the question header for display
   local question_header = prompt.format_question_header(question)
@@ -168,22 +199,48 @@ local function execute_simple_query(question)
   ui.response.open(question_header)
   ui.response.show_loading()
 
-  -- Build messages for API (no selection)
-  local messages = prompt.build_messages_no_selection(question)
+  local function submit_chat(rag_snippets)
+    local messages = prompt.build_messages_no_selection(question, {
+      rag_snippets = rag_snippets,
+    })
 
-  -- Start conversation tracking
-  conversation.start(messages)
+    -- Start conversation tracking
+    conversation.start(messages)
 
-  -- Set up follow-up callback
-  setup_followup_callback()
+    -- Set up follow-up callback
+    setup_followup_callback()
 
-  if config.options.debug then
-    vim.schedule(function()
-      vim.notify("sage-llm: execute_simple_query using stream_chat", vim.log.levels.INFO)
-    end)
+    if config.options.debug then
+      vim.schedule(function()
+        vim.notify("sage-llm: execute_simple_query using stream_chat", vim.log.levels.INFO)
+      end)
+    end
+
+    stream_response(messages, nil, request)
   end
 
-  stream_response(messages, nil, opts)
+  if not opts.use_rag then
+    submit_chat(nil)
+    return
+  end
+
+  local retrieval_handle = rag.retrieve_context({
+    question = question,
+    bufnr = vim.api.nvim_get_current_buf(),
+    selection = nil,
+  }, function(results, err)
+    if err then
+      vim.notify(
+        "sage-llm: RAG retrieval failed; continuing without repository context (" .. err .. ")",
+        vim.log.levels.WARN
+      )
+    end
+    submit_chat(results)
+  end)
+
+  if retrieval_handle then
+    ui.response.set_request_handle(retrieval_handle)
+  end
 end
 
 ---Execute an inline infill request for the current visual selection.
@@ -240,6 +297,13 @@ end
 ---In visual mode: asks about the selection
 ---In normal mode: asks a general question
 function M.ask()
+  local use_rag = config.options.rag and config.options.rag.enabled or false
+
+  local function on_toggle_rag(enabled)
+    use_rag = enabled
+    config.set_rag_enabled(enabled)
+  end
+
   -- Try to get visual selection
   local sel = selection.get_visual_selection()
 
@@ -251,8 +315,10 @@ function M.ask()
       on_toggle_search = function()
         return toggle_search()
       end,
+      rag_enabled = use_rag,
+      on_toggle_rag = on_toggle_rag,
       on_submit = function(question)
-        execute_query(sel, question)
+        execute_query(sel, question, { use_rag = use_rag })
       end,
       on_cancel = function()
         -- User cancelled, do nothing
@@ -266,8 +332,10 @@ function M.ask()
       on_toggle_search = function()
         return toggle_search()
       end,
+      rag_enabled = use_rag,
+      on_toggle_rag = on_toggle_rag,
       on_submit = function(question)
-        execute_simple_query(question)
+        execute_simple_query(question, { use_rag = use_rag })
       end,
       on_cancel = function()
         -- User cancelled, do nothing

@@ -9,6 +9,9 @@ local M = {}
 ---@field on_cancel function|nil Callback for cancel
 ---@field on_toggle_search fun(): boolean|nil Callback to toggle web search
 ---@field search_enabled boolean Whether web search is enabled for next query
+---@field on_toggle_rag fun(enabled: boolean)|nil Callback for RAG toggle
+---@field rag_enabled boolean Whether RAG is enabled for this ask
+---@field prompt_text string|nil Prompt text shown in title
 
 ---@type SageInputState
 local state = {
@@ -18,21 +21,49 @@ local state = {
   on_cancel = nil,
   on_toggle_search = nil,
   search_enabled = false,
+  on_toggle_rag = nil,
+  rag_enabled = false,
+  prompt_text = nil,
 }
 
 ---@return string
-local function footer_text()
-  local search_state = state.search_enabled and "on" or "off"
-  return " <CR> submit | <S-CR> newline | S search:" .. search_state .. " | q cancel "
+local function build_title()
+  local prompt = state.prompt_text or "Ask"
+  if not state.on_toggle_rag then
+    return " " .. prompt .. " "
+  end
+
+  local rag_text = state.rag_enabled and "on" or "off"
+  return string.format(" %s [RAG: %s] ", prompt, rag_text)
 end
 
-local function refresh_footer()
+---@return string
+local function build_footer()
+  local parts = { "<CR> submit", "<S-CR> newline" }
+
+  if state.on_toggle_search then
+    local search_text = state.search_enabled and "on" or "off"
+    parts[#parts + 1] = "S search:" .. search_text
+  end
+
+  if state.on_toggle_rag then
+    local rag_text = state.rag_enabled and "on" or "off"
+    parts[#parts + 1] = "r RAG:" .. rag_text
+  end
+
+  parts[#parts + 1] = "q cancel"
+  return " " .. table.concat(parts, " | ") .. " "
+end
+
+local function refresh_window_chrome()
   if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
     return
   end
 
   local win_config = vim.api.nvim_win_get_config(state.winid)
-  win_config.footer = footer_text()
+  win_config.title = build_title()
+  win_config.title_pos = "center"
+  win_config.footer = build_footer()
   win_config.footer_pos = "center"
   pcall(vim.api.nvim_win_set_config, state.winid, win_config)
 end
@@ -45,10 +76,16 @@ local function close_window()
   if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
     vim.api.nvim_buf_delete(state.bufnr, { force = true })
   end
+
   state.winid = nil
   state.bufnr = nil
+  state.on_submit = nil
+  state.on_cancel = nil
   state.on_toggle_search = nil
   state.search_enabled = false
+  state.on_toggle_rag = nil
+  state.rag_enabled = false
+  state.prompt_text = nil
 end
 
 ---Get the text from the input buffer
@@ -65,11 +102,12 @@ end
 local function handle_submit()
   local text = get_input_text()
   local callback = state.on_submit
+  local cancel_callback = state.on_cancel
   close_window()
   if callback and text ~= "" then
     callback(text)
-  elseif state.on_cancel then
-    state.on_cancel()
+  elseif cancel_callback then
+    cancel_callback()
   end
 end
 
@@ -80,6 +118,31 @@ local function handle_cancel()
   if callback then
     callback()
   end
+end
+
+local function handle_toggle_search()
+  local enabled = nil
+  if state.on_toggle_search then
+    enabled = state.on_toggle_search()
+  end
+
+  if type(enabled) == "boolean" then
+    state.search_enabled = enabled
+  else
+    state.search_enabled = not state.search_enabled
+  end
+
+  refresh_window_chrome()
+end
+
+local function handle_toggle_rag()
+  if not state.on_toggle_rag then
+    return
+  end
+
+  state.rag_enabled = not state.rag_enabled
+  state.on_toggle_rag(state.rag_enabled)
+  refresh_window_chrome()
 end
 
 ---Set up buffer keymaps
@@ -107,28 +170,30 @@ local function setup_keymaps(bufnr)
   vim.keymap.set("n", "q", handle_cancel, opts)
   vim.keymap.set("n", "<Esc>", handle_cancel, opts)
 
-  -- Toggle web search for next query
-  vim.keymap.set("n", "S", function()
-    local enabled = nil
-    if state.on_toggle_search then
-      enabled = state.on_toggle_search()
-    end
+  if state.on_toggle_search then
+    vim.keymap.set("n", "S", handle_toggle_search, opts)
+  end
 
-    if type(enabled) == "boolean" then
-      state.search_enabled = enabled
-    else
-      state.search_enabled = not state.search_enabled
-    end
-
-    refresh_footer()
-  end, opts)
+  if state.on_toggle_rag then
+    vim.keymap.set("n", "r", handle_toggle_rag, opts)
+  end
 
   -- Also allow <C-c> to cancel in any mode
   vim.keymap.set({ "n", "i" }, "<C-c>", handle_cancel, opts)
 end
 
+---@class SageInputOpts
+---@field on_submit function
+---@field on_cancel function|nil
+---@field prompt string|nil
+---@field position {row: number, col: number, width: number}|nil
+---@field on_toggle_search fun(): boolean|nil
+---@field search_enabled boolean|nil
+---@field rag_enabled boolean|nil
+---@field on_toggle_rag fun(enabled: boolean)|nil
+
 ---Open the input window
----@param opts {on_submit: function, on_cancel: function|nil, prompt: string|nil, position: {row: number, col: number, width: number}|nil, on_toggle_search: fun(): boolean|nil, search_enabled: boolean|nil}
+---@param opts SageInputOpts
 function M.open(opts)
   -- Close existing window if open
   close_window()
@@ -137,9 +202,12 @@ function M.open(opts)
   state.on_cancel = opts.on_cancel
   state.on_toggle_search = opts.on_toggle_search
   state.search_enabled = opts.search_enabled == true
+  state.on_toggle_rag = opts.on_toggle_rag
 
   local ui_config = config.options.input
   local prompt_text = opts.prompt or ui_config.prompt
+  state.prompt_text = prompt_text
+  state.rag_enabled = opts.rag_enabled == true
 
   -- Calculate window dimensions
   local editor_width = vim.o.columns
@@ -175,9 +243,9 @@ function M.open(opts)
     col = col,
     style = "minimal",
     border = ui_config.border,
-    title = " " .. prompt_text .. " ",
+    title = build_title(),
     title_pos = "center",
-    footer = footer_text(),
+    footer = build_footer(),
     footer_pos = "center",
   })
 
@@ -203,6 +271,17 @@ function M.open(opts)
       end
     end,
   })
+end
+
+---Check if input window is currently open
+---@return boolean
+function M.is_open()
+  return state.winid ~= nil and vim.api.nvim_win_is_valid(state.winid)
+end
+
+---Close the input window (public API)
+function M.close()
+  close_window()
 end
 
 return M

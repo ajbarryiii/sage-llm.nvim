@@ -10,7 +10,7 @@ Suppose you have a simple question, want to understand a complier error or LSP d
 - **Type errors** and warnings
 - **Syntax issues** in unfamiliar languages
 - **Code patterns** you haven't seen before
-- **ANYTHING ELSE** because fuck it, you're a dev, you're not a chatbot.
+- **ANYTHING ELSE** because fuck it, you're a dev.
 
 Get concise explanations without leaving your editor.
 
@@ -19,10 +19,10 @@ Get concise explanations without leaving your editor.
 -  **Ask about selected code** - Highlight and ask questions
 -  **LSP diagnostics** - Automatically includes error codes and messages
 -  **Dependency detection** - Understands your project's dependencies (Rust, JS/TS, Python, Go)
+-  **Optional RAG code search** - Pulls semantically related snippets from your repo into `:SageAsk`
 -  **Streaming responses** - See answers as they generate
--  **Inline edits** - Replace selected code with AI edits (`:SageInfill`)
 -  **Concise explanations** - Focuses on the "why", not just the "fix"
--  **Multiple models** - Switch between Claude, GPT-5, Gemini, etc.
+-  **Multiple models** - Switch between Claude, GPT-4, Gemini, etc.
 
 ## Requirements
 
@@ -130,6 +130,7 @@ When using `:SageAsk`:
 - **`<CR>`** - Submit question
 - **`<S-CR>`** (Shift+Enter) - Insert newline
 - **`S`** (normal mode) - Toggle web search for the next query
+- **`r`** (normal mode) - Toggle RAG context on/off
 - **`q`** or `<Esc>` - Cancel
 
 ### Response Window
@@ -190,6 +191,16 @@ require("sage-llm").setup({
   
   -- Dependency detection (opt-in for performance)
   detect_dependencies = false,
+
+  -- RAG code search for :SageAsk (opt-in)
+  rag = {
+    enabled = false,
+    embedding_model = "openai/text-embedding-3-small",
+    top_k = 6,
+    chunk_lines = 80,
+    chunk_overlap = 20,
+    max_context_chars = 6000,
+  },
   
   -- Currently configured models (shown in :SageModel picker)
   models = {                                  
@@ -231,6 +242,29 @@ Supported languages :
 - **Go** - Parses `go.mod`
 
 The detected dependencies are included in the prompt so the LLM understands your project's context (e.g., "using tokio for async" or "using React hooks").
+
+## RAG Code Search
+
+RAG is **off by default**. When enabled, `:SageAsk` retrieves semantically similar snippets from your repository and includes them in the prompt as extra context.
+
+Toggle it from the `:SageAsk` input window with `r` (normal mode). The current state is shown in the input title (`[RAG: on/off]`).
+
+Or set the default in config:
+
+```lua
+return {
+  rag = {
+    enabled = true,
+    embedding_model = "openai/text-embedding-3-small",
+  },
+}
+```
+
+Notes:
+- RAG uses OpenRouter's `/embeddings` API and your configured `api_key`
+- The index is cached under `stdpath("cache") .. "/sage-llm/rag"`
+- Larger repositories may take longer on the first ask with RAG enabled while index chunks are embedded
+- Retrieved snippets are sent to the model as additional prompt context (review for privacy-sensitive repos)
 
 ## Available Models
 

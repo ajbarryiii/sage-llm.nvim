@@ -15,6 +15,31 @@ local function debug_log(msg)
   end
 end
 
+---@param api_key string
+---@return table<string, string>
+local function build_headers(api_key)
+  return {
+    ["Authorization"] = "Bearer " .. api_key,
+    ["Content-Type"] = "application/json",
+    ["HTTP-Referer"] = "https://github.com/sage-llm/sage-llm.nvim",
+    ["X-Title"] = "sage-llm.nvim",
+  }
+end
+
+---@param response table
+---@param fallback string
+---@return string
+local function extract_error_message(response, fallback)
+  local err_msg = fallback
+  if response and response.body then
+    local ok, err_data = pcall(vim.json.decode, response.body)
+    if ok and err_data and err_data.error then
+      err_msg = err_msg .. ": " .. (err_data.error.message or vim.inspect(err_data.error))
+    end
+  end
+  return err_msg
+end
+
 ---@class SageStreamCallbacks
 ---@field on_start function|nil Called when streaming starts
 ---@field on_token function Called with each token: function(token: string)
@@ -175,12 +200,7 @@ function M.stream_chat(messages, callbacks, request_opts)
   debug_log("stream_chat started, model=" .. config.options.model)
 
   local job = curl.post(url, {
-    headers = {
-      ["Authorization"] = "Bearer " .. api_key,
-      ["Content-Type"] = "application/json",
-      ["HTTP-Referer"] = "https://github.com/sage-llm/sage-llm.nvim",
-      ["X-Title"] = "sage-llm.nvim",
-    },
+    headers = build_headers(api_key),
     body = body,
     raw = { "-N" }, -- Disable output buffering for real-time streaming
     -- NOTE: plenary.curl maps `stream` to plenary.Job's `on_stdout`, which
@@ -261,14 +281,10 @@ function M.stream_chat(messages, callbacks, request_opts)
         -- Check for HTTP errors
         if response.status ~= 200 then
           if callbacks.on_error then
-            local err_msg = "API error (HTTP " .. response.status .. ")"
-            -- Try to parse error message from body
-            if response.body then
-              local ok, err_data = pcall(vim.json.decode, response.body)
-              if ok and err_data and err_data.error then
-                err_msg = err_msg .. ": " .. (err_data.error.message or vim.inspect(err_data.error))
-              end
-            end
+            local err_msg = extract_error_message(
+              response,
+              "API error (HTTP " .. response.status .. ")"
+            )
             callbacks.on_error(err_msg)
           end
           return
@@ -395,12 +411,7 @@ function M.chat(messages, callback, request_opts)
   local cancelled = false
 
   local job = curl.post(url, {
-    headers = {
-      ["Authorization"] = "Bearer " .. api_key,
-      ["Content-Type"] = "application/json",
-      ["HTTP-Referer"] = "https://github.com/sage-llm/sage-llm.nvim",
-      ["X-Title"] = "sage-llm.nvim",
-    },
+    headers = build_headers(api_key),
     body = body,
     on_error = function(err)
       if cancelled then
@@ -434,13 +445,10 @@ function M.chat(messages, callback, request_opts)
         end
 
         if response.status ~= 200 then
-          local err_msg = "API error (HTTP " .. tostring(response.status) .. ")"
-          if response.body then
-            local ok, err_data = pcall(vim.json.decode, response.body)
-            if ok and err_data and err_data.error then
-              err_msg = err_msg .. ": " .. (err_data.error.message or vim.inspect(err_data.error))
-            end
-          end
+          local err_msg = extract_error_message(
+            response,
+            "API error (HTTP " .. tostring(response.status) .. ")"
+          )
           debug_log("error: " .. err_msg)
           callback(nil, err_msg)
           return
@@ -463,6 +471,114 @@ function M.chat(messages, callback, request_opts)
           debug_log("unexpected format")
           callback(nil, "Unexpected response format")
         end
+      end)
+    end,
+  })
+
+  return {
+    cancel = function()
+      cancelled = true
+      if job and job.shutdown then
+        job:shutdown()
+      end
+    end,
+  }
+end
+
+---Create embeddings for one or more inputs
+---@param input string|string[]
+---@param model string
+---@param callback function Called with (vectors, error)
+---@return SageRequestHandle|nil
+function M.embeddings(input, model, callback)
+  model = model or (config.options.rag and config.options.rag.embedding_model)
+
+  if not model or model == "" then
+    callback(nil, "No embedding model configured")
+    return nil
+  end
+
+  local api_key = config.get_api_key()
+  if not api_key then
+    callback(nil, "No API key found. Set $OPENROUTER_API_KEY or configure api_key in setup()")
+    return nil
+  end
+
+  local url = config.options.base_url .. "/embeddings"
+  local body = vim.json.encode({
+    model = model,
+    input = input,
+  })
+
+  local cancelled = false
+
+  local job = curl.post(url, {
+    headers = build_headers(api_key),
+    body = body,
+    on_error = function(err)
+      if cancelled then
+        return
+      end
+      vim.schedule(function()
+        callback(nil, "Network error: " .. vim.inspect(err))
+      end)
+    end,
+    callback = function(response)
+      if cancelled then
+        return
+      end
+
+      vim.schedule(function()
+        if not response then
+          callback(nil, "No response received")
+          return
+        end
+
+        if response.status ~= 200 then
+          local err_msg = extract_error_message(
+            response,
+            "Embeddings API error (HTTP " .. tostring(response.status) .. ")"
+          )
+          callback(nil, err_msg)
+          return
+        end
+
+        local ok, data = pcall(vim.json.decode, response.body)
+        if not ok then
+          callback(nil, "Failed to parse embeddings response")
+          return
+        end
+
+        if not data or type(data.data) ~= "table" then
+          callback(nil, "Unexpected embeddings response format")
+          return
+        end
+
+        local expected = type(input) == "table" and #input or 1
+        local vectors = {}
+
+        for _, item in ipairs(data.data) do
+          if type(item.embedding) ~= "table" then
+            callback(nil, "Unsupported embeddings format returned by API")
+            return
+          end
+
+          local target_index = #vectors + 1
+          if type(item.index) == "number" then
+            target_index = item.index + 1
+          end
+
+          vectors[target_index] = item.embedding
+        end
+
+        for i = 1, expected do
+          if type(vectors[i]) ~= "table" then
+            callback(nil, "Invalid embeddings response: missing embedding vector")
+            return
+          end
+        end
+
+        callback(vectors, nil)
       end)
     end,
   })

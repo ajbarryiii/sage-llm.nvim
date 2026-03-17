@@ -4,11 +4,35 @@ local context = require("sage-llm.context")
 
 local M = {}
 
+---@class SagePromptBuildOpts
+---@field rag_snippets SageRagSearchResult[]|nil
+
+---@param snippets SageRagSearchResult[]|nil
+---@return string
+local function format_rag_context(snippets)
+  if not snippets or #snippets == 0 then
+    return ""
+  end
+
+  local lines = { "Repository Context (semantic search):" }
+
+  for _, snippet in ipairs(snippets) do
+    local location = string.format("%s:%d-%d", snippet.path, snippet.start_line, snippet.end_line)
+    lines[#lines + 1] = "- " .. location
+    lines[#lines + 1] = "```"
+    lines[#lines + 1] = snippet.text
+    lines[#lines + 1] = "```"
+  end
+
+  return table.concat(lines, "\n")
+end
+
 ---Build the user message content from selection and context
 ---@param selection SageSelection
 ---@param question string User's question
+---@param opts SagePromptBuildOpts|nil
 ---@return string
-function M.build_user_message(selection, question)
+function M.build_user_message(selection, question, opts)
   local parts = {}
 
   -- File info
@@ -39,6 +63,12 @@ function M.build_user_message(selection, question)
     table.insert(parts, diags_str)
   end
 
+  local rag_context = format_rag_context(opts and opts.rag_snippets or nil)
+  if rag_context ~= "" then
+    table.insert(parts, "")
+    table.insert(parts, rag_context)
+  end
+
   -- Question
   table.insert(parts, "")
   table.insert(parts, "Question: " .. question)
@@ -49,8 +79,9 @@ end
 ---Build the complete messages array for the API
 ---@param selection SageSelection
 ---@param question string
+---@param opts SagePromptBuildOpts|nil
 ---@return table[] messages Array of {role, content} tables
-function M.build_messages(selection, question)
+function M.build_messages(selection, question, opts)
   return {
     {
       role = "system",
@@ -58,7 +89,7 @@ function M.build_messages(selection, question)
     },
     {
       role = "user",
-      content = M.build_user_message(selection, question),
+      content = M.build_user_message(selection, question, opts),
     },
   }
 end
@@ -81,8 +112,16 @@ end
 
 ---Build the complete messages array for a simple query (no code selection)
 ---@param question string
+---@param opts SagePromptBuildOpts|nil
 ---@return table[] messages Array of {role, content} tables
-function M.build_messages_no_selection(question)
+function M.build_messages_no_selection(question, opts)
+  local user_content = question
+
+  local rag_context = format_rag_context(opts and opts.rag_snippets or nil)
+  if rag_context ~= "" then
+    user_content = table.concat({ rag_context, "", "Question: " .. question }, "\n")
+  end
+
   return {
     {
       role = "system",
@@ -90,7 +129,7 @@ function M.build_messages_no_selection(question)
     },
     {
       role = "user",
-      content = question,
+      content = user_content,
     },
   }
 end

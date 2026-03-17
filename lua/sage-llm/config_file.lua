@@ -17,6 +17,10 @@ return {
   -- Uncomment to override defaults:
   -- model = "anthropic/claude-sonnet-4-20250514",
   -- detect_dependencies = false,
+  -- rag = {
+  --   enabled = false,
+  --   embedding_model = "openai/text-embedding-3-small",
+  -- },
   --
   -- response = {
   --   width = 0.6,
