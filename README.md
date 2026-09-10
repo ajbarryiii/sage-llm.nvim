@@ -2,6 +2,12 @@
 
 A plugin for interacting with LLMs in neovim.
 
+## Quick demo
+
+Select code, run `:SageAsk`, and get an explanation without leaving Neovim.
+
+![SageAsk demo: select code and ask for an explanation in Neovim](docs/sage-ask-demo.gif)
+
 ## Why?
 
 Suppose you have a simple question, want to understand a complier error or LSP diagnostic. Do you really want to open up a window and copy+paste into claude or chatgpt? You're using vim, of course you don't, you're allergic to the mouse. `sage-llm.nvim` lets you ask all these simple queries right from neovim. It is specifically intended for: 
