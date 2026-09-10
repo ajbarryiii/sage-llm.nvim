@@ -96,7 +96,7 @@ Configuration values are resolved in this order (highest to lowest):
 ### Model Persistence
 - When user runs `:SageModel` and selects a model, it's **automatically saved** to config file
 - On next Neovim startup, the selected model is loaded from config file
-- Model name is displayed in response window title: `" sage-llm (claude-sonnet-4.5) "`
+- Model name is displayed in response window title: `" sage-llm (gemini-3.8-flash) "`
 
 ### Implementation Details
 - File location: `~/.config/sage-llm/config.lua` (respects `$XDG_CONFIG_HOME`)
@@ -161,15 +161,17 @@ Question: {user_question}
   
   detect_dependencies = false,                -- Toggle with :SageDepsOn/Off
   
-  models = {                                  -- List of models in picker
-    "openai/gpt-5-nano",
-    "openai/gpt-5.2-codex",
-    "moonshotai/kimi-k2.5",
-    "google/gemini-3-flash-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4.1-fast",
-    "anthropic/claude-opus-4.6",
-    "anthropic/claude-haiku-4.5",
+  models = {                                  -- OpenRouter IDs verified 2026-09-10
+    "openai/gpt-oss-20b",
+    "inception/mercury-2.5",
+    "inception/mercury-2",
+    "google/gemini-3.8-flash",
+    "openai/gpt-5.6-luna",
+    "qwen/qwen3.8-flash",
+    "deepseek/deepseek-v4.1-flash",
+    "anthropic/claude-sonnet-5",
+    "openai/gpt-6-astra",
+    "anthropic/claude-fable-5.1",
   },
   
   system_prompt = [[...]],                    -- Tuned for concise teaching

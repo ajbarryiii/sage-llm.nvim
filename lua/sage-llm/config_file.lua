@@ -15,7 +15,7 @@ return {
   api_key = "your-api-key-here",
 
   -- Uncomment to override defaults:
-  -- model = "anthropic/claude-sonnet-4-20250514",
+  -- model = "google/gemini-3.8-flash",
   -- detect_dependencies = false,
   -- rag = {
   --   enabled = false,

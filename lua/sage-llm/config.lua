@@ -124,16 +124,21 @@ M.defaults = {
   },
   debug = false,
 
+  -- OpenRouter IDs verified 2026-09-10; pricing and selection notes are in README.md.
   models = {
+    -- Budget choices for everyday questions and edits
     "openai/gpt-oss-20b",
-    "openai/gpt-5-nano",
-    "openai/gpt-5.2-codex",
-    "moonshotai/kimi-k2.5",
-    "google/gemini-3-flash-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4.1-fast",
-    "anthropic/claude-opus-4.6",
-    "anthropic/claude-haiku-4.5",
+    "inception/mercury-2.5",
+    "inception/mercury-2",
+    "google/gemini-3.8-flash",
+    "openai/gpt-5.6-luna",
+    "qwen/qwen3.8-flash",
+    "deepseek/deepseek-v4.1-flash",
+    -- More capable coding option at a moderate price
+    "anthropic/claude-sonnet-5",
+    -- Flagships for difficult questions
+    "openai/gpt-6-astra",
+    "anthropic/claude-fable-5.1",
   },
 
   system_prompt = [[You are a concise coding tutor helping a developer understand code.

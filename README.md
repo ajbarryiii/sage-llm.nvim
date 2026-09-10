@@ -22,7 +22,7 @@ Get concise explanations without leaving your editor.
 -  **Optional RAG code search** - Pulls semantically related snippets from your repo into `:SageAsk`
 -  **Streaming responses** - See answers as they generate
 -  **Concise explanations** - Focuses on the "why", not just the "fix"
--  **Multiple models** - Switch between Claude, GPT-4, Gemini, etc.
+-  **Multiple models** - Switch between Claude, GPT, Gemini, Mercury, and more
 
 ## Requirements
 
@@ -144,7 +144,7 @@ When using `:SageAsk`:
 - **`S`** - Toggle web search for the next query
 - **`<C-c>`** - Cancel streaming (if in progress)
 
-Web search is off by default. When enabled, the plugin sends `:online` model variants to OpenRouter (for example, `anthropic/claude-sonnet-4.5:online`). The toggle resets to off after each query.
+Web search is off by default. When enabled, the plugin sends `:online` model variants to OpenRouter (for example, `google/gemini-3.8-flash:online`). The toggle resets to off after each query.
 
 ## Configuration
 
@@ -158,7 +158,7 @@ return {
   api_key = "sk-or-v1-...",
   
   -- Model to use (optional, selected model is auto-saved here)
-  model = "anthropic/claude-sonnet-4-20250514",
+  model = "google/gemini-3.8-flash",
 }
 ```
 
@@ -202,17 +202,21 @@ require("sage-llm").setup({
     max_context_chars = 6000,
   },
   
-  -- Currently configured models (shown in :SageModel picker)
-  models = {                                  
+  -- Default picker models (OpenRouter IDs verified 2026-09-10)
+  models = {
+    -- Budget choices for everyday questions and edits
     "openai/gpt-oss-20b",
-    "openai/gpt-5-nano",
-    "openai/gpt-5.2-codex",
-    "moonshotai/kimi-k2.5",
-    "google/gemini-3-flash-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4.1-fast",
-    "anthropic/claude-opus-4.6",
-    "anthropic/claude-haiku-4.5",
+    "inception/mercury-2.5",
+    "inception/mercury-2",
+    "google/gemini-3.8-flash",
+    "openai/gpt-5.6-luna",
+    "qwen/qwen3.8-flash",
+    "deepseek/deepseek-v4.1-flash",
+    -- More capable coding option at a moderate price
+    "anthropic/claude-sonnet-5",
+    -- Flagships for difficult questions
+    "openai/gpt-6-astra",
+    "anthropic/claude-fable-5.1",
   },
   
   -- System prompt (tuned for concise teaching)
@@ -268,12 +272,35 @@ Notes:
 
 ## Available Models
 
-Default: `openai/gpt-oss-20b`
+Default: `openai/gpt-oss-20b` (an inexpensive starting point).
+
+The built-in picker balances everyday coding help with two flagships for harder problems. All ten IDs were checked against OpenRouter's [live model catalog](https://openrouter.ai/api/v1/models) and their provider endpoints on **2026-09-10**: each accepts text, returns text, has an active endpoint, and has no announced expiration in the catalog.
+
+Prices below are the catalog's USD rates per **1 million tokens**, before caching or additional services. They are a dated comparison, not fixed prices; provider routing, promotions, and long-context or time-of-day rates can change the bill. Context is the catalog maximum and can vary by provider.
+
+| Model / OpenRouter ID | Why it is included | Input / output | Context |
+|---|---|---|---|
+| [GPT-OSS-20B](https://openrouter.ai/openai/gpt-oss-20b) — `openai/gpt-oss-20b` | Existing low-cost default for short explanations | $0.03 / $0.13 | 131K |
+| [Mercury 2.5](https://openrouter.ai/inception/mercury-2.5) — `inception/mercury-2.5` | Newer diffusion model for responsive coding help | $0.04 / $0.15 (promotion) | 260K |
+| [Mercury 2](https://openrouter.ai/inception/mercury-2) — `inception/mercury-2` | Fast diffusion alternative for interactive questions | $0.25 / $0.75 | 128K |
+| [Gemini 3.8 Flash](https://openrouter.ai/google/gemini-3.8-flash) — `google/gemini-3.8-flash` | Latest Gemini Flash, with improved coding and reasoning | $0.75 / $3.75 (promotion) | 1.05M |
+| [GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna) — `openai/gpt-5.6-luna` | Fast, inexpensive GPT option | $0.20 / $1.20 | 1.05M |
+| [Qwen3.8 Flash](https://openrouter.ai/qwen/qwen3.8-flash) — `qwen/qwen3.8-flash` | Low-cost coding and codebase analysis | $0.15 / $0.47 | 1M |
+| [DeepSeek V4.1 Flash](https://openrouter.ai/deepseek/deepseek-v4.1-flash) — `deepseek/deepseek-v4.1-flash` | Latest DeepSeek Flash with inexpensive reasoning | $0.15 / $0.60 (off-peak) | 1.05M |
+| [Claude Sonnet 5](https://openrouter.ai/anthropic/claude-sonnet-5) — `anthropic/claude-sonnet-5` | Strong coding option below flagship pricing | $2 / $10 | 1M |
+| [GPT-6 Astra](https://openrouter.ai/openai/gpt-6-astra) — `openai/gpt-6-astra` | OpenAI flagship for demanding software engineering | $10 / $50 | 1.05M |
+| [Claude Fable 5.1](https://openrouter.ai/anthropic/claude-fable-5.1) — `anthropic/claude-fable-5.1` | Anthropic flagship for complex coding and reasoning | $10 / $50 | 1M |
+
+Mercury 2.5's listed price includes an 80% discount (undiscounted: $0.20 / $0.75); Gemini 3.8 Flash includes 50% off (undiscounted: $1.50 / $7.50). DeepSeek's direct endpoint also has peak rates of $0.30 / $1.20. GPT-5.6 Luna and GPT-6 Astra have higher rates above 272K input tokens. Check the linked provider listings for current terms.
+
+For interactive use, start with Mercury 2/2.5 or Gemini 3.8 Flash; choose Qwen or DeepSeek when output cost matters most, or a flagship for a difficult explanation. These are selection guidelines based on the model descriptions, pricing, and OpenRouter's reported latency/throughput, not plugin-specific benchmarks. Actual speed depends on the provider, load, and reasoning effort. The list uses regular text-generation IDs rather than batch, image-generation, or free variants.
 
 Switch models with `:SageModel` or configure in `setup()`:
 
 - `:SageModel` includes `Add custom model...` and `Remove model...` options so you can manage your picker list and persist changes to config.
 - `:SageModelRemove` jumps directly to the remove-model picker.
+
+A `models` list saved by the picker in `:SageConfig` takes precedence over these defaults, as does a list supplied to `setup()`. To adopt the new defaults, remove those `models` overrides and restart Neovim, or copy the desired new IDs into your existing list to retain custom entries. Your saved `model` selection still takes precedence over the startup default.
 
 See [OpenRouter pricing](https://openrouter.ai/models) for cost comparison.
 
