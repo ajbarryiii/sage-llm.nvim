@@ -12,9 +12,35 @@ describe("ChatGPT subscription authentication", function()
   local discovery
   local deferred_refresh
   local peers
+  local peer_locks
   local verification_claims
   local revocation_statuses
   local uv = vim.uv or vim.loop
+  local ffi = require("ffi")
+  pcall(ffi.cdef, "int flock(int fd, int operation);")
+
+  local function hold_session_lock()
+    local fd = assert(uv.fs_open(auth_dir .. "/session.lock", "a", 384))
+    assert.equals(0, ffi.C.flock(fd, 6))
+    local released = false
+    local function release()
+      if not released then
+        released = true
+        ffi.C.flock(fd, 8)
+        uv.fs_close(fd)
+      end
+    end
+    peer_locks[#peer_locks + 1] = release
+    return release
+  end
+
+  local function assert_session_unlocked()
+    if not uv.fs_stat(auth_dir .. "/session.lock") then
+      return
+    end
+    assert.equals(384, uv.fs_stat(auth_dir .. "/session.lock").mode % 512)
+    hold_session_lock()()
+  end
 
   local function decode(value)
     return (
@@ -120,6 +146,7 @@ describe("ChatGPT subscription authentication", function()
     opened = nil
     requests = {}
     peers = {}
+    peer_locks = {}
     verification_claims = {}
     revocation_statuses = { 200 }
     deferred_refresh = nil
@@ -214,6 +241,9 @@ describe("ChatGPT subscription authentication", function()
         peer:close()
       end
     end
+    for _, release in ipairs(peer_locks) do
+      release()
+    end
     vim.ui.open = original_open
     for name, value in pairs(originals) do
       package.loaded[name] = value
@@ -276,7 +306,7 @@ describe("ChatGPT subscription authentication", function()
     assert.equals("oaiapp_registered", requests[1].form.client_id)
     assert.equals(params.redirect_uri, requests[1].form.redirect_uri)
     assert.is_nil(uv.fs_stat(requests[1].options.body))
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("rejects a mismatched callback state without consuming a valid attempt", function()
@@ -362,7 +392,7 @@ describe("ChatGPT subscription authentication", function()
     assert.is_false(result[1])
     assert.matches("invalid ChatGPT identity", result[2])
     assert.equals(0, #verification_claims)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("rejects unsupported token types, invalid expiry, and malformed identity fields", function()
@@ -385,7 +415,7 @@ describe("ChatGPT subscription authentication", function()
       assert.is_false(result[1])
       assert.is_string(result[2])
       assert.is_false(auth.status().connected)
-      assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+      assert_session_unlocked()
     end
   end)
 
@@ -416,7 +446,7 @@ describe("ChatGPT subscription authentication", function()
     assert.equals("account-a", verification_claims[1].subject)
     assert.is_nil(verification_claims[1].nonce)
     assert.is_nil(uv.fs_stat(requests[1].options.body))
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("retains rotated credentials across a transient JWKS failure and process restart", function()
@@ -436,7 +466,7 @@ describe("ChatGPT subscription authentication", function()
     assert.equals("old-access", staged.access_token)
     assert.equals("new-refresh", staged.pending_refresh.tokens.refresh_token)
     assert.equals(384, uv.fs_stat(auth_dir .. "/credentials.json").mode % 512)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
 
     package.loaded["sage-llm.chatgpt_auth"] = nil
     auth = require("sage-llm.chatgpt_auth")
@@ -527,10 +557,7 @@ describe("ChatGPT subscription authentication", function()
     local expired = record()
     expired.expires_at = os.time() - 5
     write_credentials(expired)
-    vim.fn.writefile(
-      { vim.json.encode({ owner = "other-instance", pid = uv.os_getpid() }) },
-      auth_dir .. "/session.lock"
-    )
+    local release = hold_session_lock()
     local result
     auth.get_access_token(function(token, err)
       result = { token, err }
@@ -540,12 +567,48 @@ describe("ChatGPT subscription authentication", function()
     renewed.access_token = "other-access"
     renewed.refresh_token = "other-refresh"
     write_credentials(renewed)
-    uv.fs_unlink(auth_dir .. "/session.lock")
+    release()
     wait_for(function()
       return result ~= nil
     end)
     assert.same({ "other-access" }, result)
     assert.equals(0, #requests)
+  end)
+
+  it("serializes competing instances even when an old lock file contains a dead owner", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    write_credentials(expired)
+    vim.fn.writefile({ '{"owner":"abandoned","pid":99999999}' }, auth_dir .. "/session.lock")
+    deferred_refresh = {}
+    local first
+    auth.get_access_token(function(token)
+      first = token
+    end)
+    wait_for(function()
+      return deferred_refresh.options ~= nil
+    end)
+    local original_inode = uv.fs_stat(auth_dir .. "/session.lock").ino
+    package.loaded["sage-llm.chatgpt_auth"] = nil
+    local other = require("sage-llm.chatgpt_auth")
+    local second
+    other.get_access_token(function(token)
+      second = token
+    end)
+    vim.wait(150, function()
+      return false
+    end, 5)
+    assert.equals(1, #requests)
+    assert.is_nil(second)
+    assert.equals(original_inode, uv.fs_stat(auth_dir .. "/session.lock").ino)
+    deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
+    wait_for(function()
+      return first ~= nil and second ~= nil
+    end)
+    assert.equals("new-access", first)
+    assert.equals("new-access", second)
+    assert.equals(original_inode, uv.fs_stat(auth_dir .. "/session.lock").ino)
+    assert_session_unlocked()
   end)
 
   it("does not let cancelled refresh callers stop other callers", function()
@@ -638,7 +701,7 @@ describe("ChatGPT subscription authentication", function()
     assert.is_nil(result)
     vim.api.nvim_exec_autocmds("VimLeavePre", { group = "SageChatGPTAuth" })
     assert.is_true(requests[1].cancelled)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
     assert.is_false(auth.status().connected)
     wait_for(function()
       return result ~= nil
@@ -674,7 +737,7 @@ describe("ChatGPT subscription authentication", function()
       assert.is_false(auth.status().connected)
       assert.is_true(result[1])
       assert.matches("remote revocation was not confirmed", result[2])
-      assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+      assert_session_unlocked()
       deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
       vim.wait(150, function()
         return false
@@ -730,7 +793,7 @@ describe("ChatGPT subscription authentication", function()
     assert.matches("Could not securely save", result[2])
     assert.equals(0, #requests)
     assert.equals("old-refresh", saved_credentials().refresh_token)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("stops revocation backoff on editor exit", function()
@@ -749,7 +812,7 @@ describe("ChatGPT subscription authentication", function()
     end)
     assert.equals(2, #requests)
     assert.is_nil(saved_credentials().refresh_token)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("rejects platforms without the required owner-only filesystem permissions", function()
@@ -818,7 +881,7 @@ describe("ChatGPT subscription authentication", function()
     assert.is_true(result[1])
     assert.matches("not confirmed", result[2])
     assert.is_false(auth.status().connected)
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 
   it("cancels a pending exchange and immediately removes its private form body", function()
@@ -844,6 +907,6 @@ describe("ChatGPT subscription authentication", function()
     assert.is_false(result[1])
     assert.is_true(requests[1].cancelled)
     assert.is_nil(uv.fs_stat(requests[1].options.body))
-    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+    assert_session_unlocked()
   end)
 end)

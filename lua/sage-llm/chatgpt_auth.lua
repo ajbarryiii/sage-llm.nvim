@@ -3,6 +3,21 @@ local curl = require("plenary.curl")
 local crypto = require("sage-llm.chatgpt_crypto")
 local uv = vim.uv or vim.loop
 
+-- POSIX flock owns a lock for an open file description and releases it on
+-- process death. Keep the lock inode permanently: unlinking it would allow two
+-- processes to lock different files at the same path.
+local ffi_ok, ffi = pcall(require, "ffi")
+local flock
+if ffi_ok then
+  pcall(ffi.cdef, "int flock(int fd, int operation);")
+  local ok, symbol = pcall(function()
+    return ffi.C.flock
+  end)
+  if ok then
+    flock = symbol
+  end
+end
+
 local M = {}
 local ISSUER = "https://auth.openai.com"
 local AUTHORIZE = ISSUER .. "/api/accounts/authorize"
@@ -387,6 +402,30 @@ local function same_session(first, second)
   return true
 end
 
+local function open_lock(path)
+  if not flock then
+    return nil, "ChatGPT sign-in requires Neovim with LuaJIT for secure session locking"
+  end
+  local info = uv.fs_lstat(path)
+  if info and info.type ~= "file" then
+    return nil, "Invalid ChatGPT lock storage"
+  end
+  local fd = uv.fs_open(path, "a", 384)
+  if not fd then
+    return nil, "Could not create a secure ChatGPT lock"
+  end
+  if not uv.fs_fchmod(fd, 384) then
+    uv.fs_close(fd)
+    return nil, "Could not protect ChatGPT lock storage"
+  end
+  return fd
+end
+
+local function unlock(fd)
+  flock(fd, 8) -- LOCK_UN
+  uv.fs_close(fd)
+end
+
 -- Protect rotating refresh tokens across Neovim instances, as well as locally.
 local function acquire_lock(callback, immediate)
   local path, err = ensure_directory()
@@ -394,12 +433,11 @@ local function acquire_lock(callback, immediate)
     callback(nil, err)
     return { cancel = function() end }
   end
-  local owner = crypto.random_token()
-  if not owner then
-    callback(nil, "Could not create a secure ChatGPT session lock")
+  local fd, lock_err = open_lock(path .. "/session.lock")
+  if not fd then
+    callback(nil, lock_err)
     return { cancel = function() end }
   end
-  local lock_path = path .. "/session.lock"
   local started = uv.hrtime()
   local timer = uv.new_timer()
   active_timers[timer] = true
@@ -410,6 +448,9 @@ local function acquire_lock(callback, immediate)
     end
     finished = true
     close(timer)
+    if not release then
+      uv.fs_close(fd)
+    end
     if immediate then
       callback(release, failure)
     else
@@ -422,29 +463,20 @@ local function acquire_lock(callback, immediate)
     if finished then
       return
     end
-    local written =
-      private_write(lock_path, vim.json.encode({ owner = owner, pid = uv.os_getpid() }))
-    if written then
+    if flock(fd, 6) == 0 then -- LOCK_EX | LOCK_NB
+      local released = false
       local release
       release = function()
-        held_locks[release] = nil
-        local record = read_json(lock_path)
-        if record and record.owner == owner then
-          uv.fs_unlink(lock_path)
+        if released then
+          return
         end
+        released = true
+        held_locks[release] = nil
+        unlock(fd)
       end
       held_locks[release] = true
       finish(release)
       return
-    end
-    local info = uv.fs_lstat(lock_path)
-    local stale_after = math.ceil(request_timeout() / 1000) * 3 + 30
-    if info and info.type == "file" and os.time() - info.mtime.sec > stale_after then
-      local existing = read_json(lock_path)
-      local alive = existing and type(existing.pid) == "number" and uv.kill(existing.pid, 0)
-      if not alive then
-        uv.fs_unlink(lock_path)
-      end
     end
     if final_attempt or (uv.hrtime() - started) / 1e6 > request_timeout() then
       finish(nil, "Another Neovim instance is updating ChatGPT access. Try again")
@@ -490,17 +522,17 @@ local function host_id()
     end
     return saved.ext_agent_host_id
   end
-  local lock_path = path .. "/host.lock"
-  local lock_info = uv.fs_lstat(lock_path)
-  if lock_info and lock_info.type == "file" and os.time() - lock_info.mtime.sec > 60 then
-    uv.fs_unlink(lock_path)
+  local fd, lock_err = open_lock(path .. "/host.lock")
+  if not fd then
+    return nil, lock_err
   end
-  if not private_write(lock_path, "creating host identifier") then
+  if flock(fd, 6) ~= 0 then
+    uv.fs_close(fd)
     return nil, "Another Neovim instance is initializing ChatGPT sign-in. Try again"
   end
   saved, read_err = read_json(path .. "/host.json")
   if saved or read_err then
-    uv.fs_unlink(lock_path)
+    unlock(fd)
     if saved and type(saved.ext_agent_host_id) == "string" then
       return saved.ext_agent_host_id
     end
@@ -508,12 +540,12 @@ local function host_id()
   end
   local uuid = crypto.random_uuid()
   if not uuid then
-    uv.fs_unlink(lock_path)
+    unlock(fd)
     return nil, "Could not create a secure ChatGPT host identifier"
   end
   local value = "urn:uuid:" .. uuid
   local ok, save_err = save_record(path .. "/host.json", { ext_agent_host_id = value })
-  uv.fs_unlink(lock_path)
+  unlock(fd)
   return ok and value or nil, save_err
 end
 

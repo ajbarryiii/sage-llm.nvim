@@ -36,7 +36,7 @@ Get concise explanations without leaving your editor.
 - Neovim >= 0.10
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - Hosted models: an OpenRouter API key, or an eligible ChatGPT subscription
-- ChatGPT sign-in: macOS/Linux, `openssl` on your PATH (for secure sign-in verification), and a browser
+- ChatGPT sign-in: macOS/Linux, Neovim with LuaJIT, `openssl` on your PATH (for secure sign-in verification), and a browser
 
 ## Installation
 
@@ -83,6 +83,8 @@ This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/s
 - `:SageChatGPTLogin!` connects another account or workspace. Sage keeps one active connection; an unsuccessful sign-in preserves the previous connection.
 
 No Codex CLI or OpenAI API key is needed. ChatGPT sign-in currently supports macOS/Linux and requires `openssl` on your PATH. On macOS, if it is missing, install it with `brew install openssl` and add its `bin` directory to your PATH.
+
+OS-managed advisory locks serialize credential updates and release automatically on process exit. ChatGPT sign-in requires a LuaJIT build of Neovim.
 
 Credentials are stored separately from your Lua configuration in `stdpath("data")/sage-llm/chatgpt`, using owner-only permissions and atomic writes. Access tokens refresh automatically. Browser sign-in uses PKCE and validates the returned identity; credentials are never read from other apps. Do not commit or share this directory. Subscription requests send the prompt and conversation history with `store = false`; Sage supplies no tools. Repository embeddings/RAG and the OpenRouter web-search toggle are unavailable with this provider.
 
