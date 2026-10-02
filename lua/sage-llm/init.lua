@@ -73,6 +73,7 @@ end
 ---@param on_error fun(err: string)|nil
 ---@param opts SageRequestOptions|nil
 local function stream_response(messages, on_error, opts)
+  local provider = config.options.provider or "openrouter"
   local started = false
   local settled = false
   local handle = api.stream_chat(messages, {
@@ -115,6 +116,7 @@ local function stream_response(messages, on_error, opts)
 
   if handle then
     ui.response.set_request_handle({
+      provider = provider,
       cancel = function()
         handle.cancel()
         if not settled then
@@ -320,6 +322,7 @@ local function execute_infill(sel, instruction)
   ui.response.set_on_followup(nil)
 
   local messages = prompt.build_infill_messages(sel, instruction)
+  local provider = config.options.provider or "openrouter"
   local handle = api.chat(messages, function(content, err)
     if err then
       ui.response.show_error(err)
@@ -354,7 +357,7 @@ local function execute_infill(sel, instruction)
   end, opts)
 
   if handle then
-    ui.response.set_request_handle(handle)
+    ui.response.set_request_handle({ provider = provider, cancel = handle.cancel })
   end
 end
 
@@ -551,6 +554,8 @@ function M.chatgpt_login(new_account)
       vim.notify("sage-llm: " .. (err or "ChatGPT sign-in failed"), vim.log.levels.ERROR)
       return
     end
+    ui.response.cancel_stream("chatgpt")
+    require("sage-llm.chatgpt").cancel_all()
     if new_account then
       config.options.chatgpt.model = nil
       local saved, save_err =
@@ -567,9 +572,7 @@ end
 
 ---Remove Sage's saved ChatGPT credentials.
 function M.chatgpt_logout()
-  if config.options.provider == "chatgpt" then
-    ui.response.cancel_stream()
-  end
+  ui.response.cancel_stream("chatgpt")
   require("sage-llm.chatgpt").cancel_all()
   require("sage-llm.chatgpt_auth").logout(function(ok, err)
     vim.notify(

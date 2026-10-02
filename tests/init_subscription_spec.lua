@@ -88,8 +88,8 @@ describe("subscription conversation recovery", function()
         set_on_followup = function() end,
         set_on_toggle_search = function() end,
         set_search_enabled = function() end,
-        cancel_stream = function()
-          if current_handle then
+        cancel_stream = function(provider)
+          if current_handle and (not provider or current_handle.provider == provider) then
             current_handle.cancel()
           end
         end,
@@ -226,6 +226,8 @@ describe("subscription conversation recovery", function()
     question = "follow-up"
     sage.followup()
     requests[2].callbacks.on_token("partial")
+    assert.equals("chatgpt", current_handle.provider)
+    require("sage-llm.config").options.provider = "openrouter"
     local events = {}
     stub("sage-llm.chatgpt", {
       cancel_all = function()
@@ -246,6 +248,62 @@ describe("subscription conversation recovery", function()
     assert.equals(3, #messages)
     assert.equals("\ninitial answer", messages[2].content)
     assert.equals("retry", messages[3].content)
+  end)
+
+  it("keeps a running OpenRouter request when signing out of ChatGPT", function()
+    require("sage-llm.config").options.provider = "openrouter"
+    question = "OpenRouter query"
+    sage.ask()
+    assert.equals("openrouter", current_handle.provider)
+    stub("sage-llm.chatgpt_auth", {
+      logout = function(callback)
+        callback(true)
+      end,
+    })
+    sage.chatgpt_logout()
+    assert.equals(0, cancelled)
+    requests[2].callbacks.on_token("OpenRouter answer")
+    requests[2].callbacks.on_complete()
+    assert.equals(1, conversation.turn_count())
+  end)
+
+  it("invalidates old operations only after a successful account switch", function()
+    question = "old account question"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    local invalidations = 0
+    stub("sage-llm.chatgpt", {
+      cancel_all = function()
+        invalidations = invalidations + 1
+      end,
+    })
+    local login_callback
+    stub("sage-llm.chatgpt_auth", {
+      login = function(callback)
+        login_callback = callback
+      end,
+    })
+    local cfg = require("sage-llm.config")
+    cfg.options.chatgpt = { model = "old-model" }
+    cfg.set_provider = function(value)
+      cfg.options.provider = value
+    end
+    stub("sage-llm.config_file", {
+      update = function()
+        return true
+      end,
+    })
+    require("sage-llm.models").select_chatgpt = function() end
+    sage.chatgpt_login(true)
+    assert.equals(0, cancelled)
+    assert.equals(0, invalidations)
+    login_callback(true)
+    assert.equals(1, cancelled)
+    assert.equals(1, invalidations)
+    requests[2].callbacks.on_complete()
+    local messages = conversation.add_followup("new account question")
+    assert.equals(3, #messages)
+    assert.equals("\ninitial answer", messages[2].content)
   end)
 
   it("reports unconfirmed remote revocation after local sign-out", function()

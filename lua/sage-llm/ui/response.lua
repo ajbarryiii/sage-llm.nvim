@@ -197,7 +197,11 @@ local function cancel_stream()
 end
 
 ---Cancel the displayed request, including its conversation recovery callback.
-function M.cancel_stream()
+---@param provider string|nil Only cancel a request started by this provider.
+function M.cancel_stream(provider)
+  if provider and (not state.request_handle or state.request_handle.provider ~= provider) then
+    return
+  end
   if state.request_handle or state.is_streaming then
     cancel_stream()
   end

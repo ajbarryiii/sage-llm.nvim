@@ -68,6 +68,9 @@ local function new_request()
       cancel_handle(handle)
     end
   end
+  function state.is_current()
+    return not state.cancelled and state.epoch == request_epoch
+  end
   function state.deliver(callback, ...)
     if not callback then
       return
@@ -75,7 +78,7 @@ local function new_request()
     local args = { ... }
     local count = select("#", ...)
     vim.schedule(function()
-      if not state.cancelled and state.epoch == request_epoch then
+      if state.is_current() then
         callback(unpack(args, 1, count))
       end
     end)
@@ -283,7 +286,7 @@ local function fetch_models(state, callback)
 end
 
 ---Fetch the current account's model choices; never share a catalog across accounts.
----@param callback fun(models: table[]|nil, err: string|nil)
+---@param callback fun(models: table[]|nil, err: string|nil, is_current: fun(): boolean)
 ---@return SageRequestHandle
 function M.list_models(callback)
   vim.validate({ callback = { callback, "function" } })
@@ -297,7 +300,7 @@ function M.list_models(callback)
       state.stop_handles()
     end
     state.cleanup()
-    state.deliver(callback, models, err)
+    state.deliver(callback, models, err, state.is_current)
   end
   state.track(auth.get_access_token(function(token, err)
     if state.cancelled or state.finished then

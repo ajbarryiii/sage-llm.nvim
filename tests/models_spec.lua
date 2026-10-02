@@ -250,6 +250,39 @@ describe("models", function()
     assert.equals("subscription-model", chosen_model)
   end)
 
+  it("ignores an open subscription picker after its account changes or signs out", function()
+    local valid = true
+    local chosen
+    package.preload["sage-llm.config"] = function()
+      return {
+        options = { chatgpt = {} },
+        set_provider = function()
+          error("Stale picker must not switch providers")
+        end,
+        set_model = function(value)
+          chosen = value
+        end,
+      }
+    end
+    package.preload["sage-llm.chatgpt"] = function()
+      return {
+        list_models = function(callback)
+          callback({ { slug = "account-a-model", display_name = "A" } }, nil, function()
+            return valid
+          end)
+        end,
+      }
+    end
+    local select_callback
+    vim.ui.select = function(_, _, callback)
+      select_callback = callback
+    end
+    require("sage-llm.models").select_chatgpt()
+    valid = false
+    select_callback({ slug = "account-a-model", display_name = "A" })
+    assert.is_nil(chosen)
+  end)
+
   it("warns when the subscription has no available models", function()
     package.preload["sage-llm.config"] = function()
       return { options = { chatgpt = {} } }

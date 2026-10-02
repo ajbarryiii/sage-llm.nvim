@@ -18,6 +18,8 @@ local active_requests = {}
 local active_timers = {}
 local held_locks = {}
 local cleanup_registered = false
+local exiting = false
+local pending_logouts = {}
 
 local function register_cleanup()
   if cleanup_registered then
@@ -27,6 +29,7 @@ local function register_cleanup()
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = vim.api.nvim_create_augroup("SageChatGPTAuth", { clear = true }),
     callback = function()
+      exiting = true
       if login_attempt then
         login_attempt.cancel()
       end
@@ -42,6 +45,11 @@ local function register_cleanup()
       end
       for release in pairs(held_locks) do
         release()
+      end
+      -- Complete local sign-out synchronously after releasing this process's
+      -- refresh locks; scheduled callbacks will not run reliably during exit.
+      for complete in pairs(pending_logouts) do
+        complete()
       end
     end,
   })
@@ -254,7 +262,9 @@ local function request(url, form, callback)
       uv.fs_unlink(body_path)
     end
     vim.schedule(function()
-      callback(response, err)
+      if not exiting then
+        callback(response, err)
+      end
     end)
   end
   local opts = {
@@ -392,6 +402,7 @@ local function acquire_lock(callback, immediate)
   local lock_path = path .. "/session.lock"
   local started = uv.hrtime()
   local timer = uv.new_timer()
+  active_timers[timer] = true
   local finished = false
   local function finish(release, failure)
     if finished then
@@ -407,7 +418,7 @@ local function acquire_lock(callback, immediate)
       end)
     end
   end
-  local function attempt()
+  local function attempt(final_attempt)
     if finished then
       return
     end
@@ -435,14 +446,25 @@ local function acquire_lock(callback, immediate)
         uv.fs_unlink(lock_path)
       end
     end
-    if (uv.hrtime() - started) / 1e6 > request_timeout() then
+    if final_attempt or (uv.hrtime() - started) / 1e6 > request_timeout() then
       finish(nil, "Another Neovim instance is updating ChatGPT access. Try again")
       return
     end
-    timer:start(100, 0, vim.schedule_wrap(attempt))
+    timer:start(
+      100,
+      0,
+      vim.schedule_wrap(function()
+        if not exiting then
+          attempt()
+        end
+      end)
+    )
   end
   attempt()
   return {
+    retry_on_exit = function()
+      attempt(true)
+    end,
     cancel = function()
       finish(nil, "ChatGPT session update cancelled")
     end,
@@ -518,6 +540,10 @@ function M.get_access_token(callback)
       caller.cancelled = true
     end,
   }
+  if exiting or next(pending_logouts) then
+    callback(nil, "ChatGPT sign-out is in progress. Sign in again after it completes")
+    return handle
+  end
   local record, read_err = credentials()
   if not connected(record) then
     callback(nil, read_err or SIGN_IN)
@@ -544,6 +570,11 @@ function M.get_access_token(callback)
   acquire_lock(function(release, lock_err)
     if not release then
       finish(nil, lock_err)
+      return
+    end
+    if exiting then
+      release()
+      finish(nil, SIGN_IN)
       return
     end
     -- Another process may have renewed or signed out while we waited.
@@ -711,6 +742,10 @@ function M.login(callback, opts)
   register_cleanup()
   if opts.new_account ~= nil then
     vim.validate({ new_account = { opts.new_account, "boolean" } })
+  end
+  if exiting or next(pending_logouts) then
+    callback(false, "ChatGPT sign-out is in progress. Try signing in again shortly")
+    return { cancel = function() end }
   end
   if login_attempt then
     callback(false, "ChatGPT sign-in is already in progress")
@@ -990,17 +1025,32 @@ function M.logout(callback)
   local pending
   local release_lock
   local lock_finished = false
+  local lock_handle
+  local complete_on_exit
   local function finish(ok, err)
     if done then
       return
     end
     done = true
+    pending_logouts[complete_on_exit] = nil
     if release_lock then
       release_lock()
     end
     callback(ok, err)
   end
-  local lock_handle = acquire_lock(function(release, lock_err)
+  complete_on_exit = function()
+    cancelled = true
+    if release_lock then
+      finish(
+        true,
+        "Signed out locally; remote revocation was not confirmed. Disconnect the app in ChatGPT Settings"
+      )
+    elseif lock_handle and lock_handle.retry_on_exit then
+      lock_handle.retry_on_exit()
+    end
+  end
+  pending_logouts[complete_on_exit] = true
+  lock_handle = acquire_lock(function(release, lock_err)
     lock_finished = true
     if not release then
       finish(false, lock_err)
@@ -1038,6 +1088,10 @@ function M.logout(callback)
     end
     if not refresh_token then
       complete(true)
+      return
+    end
+    if exiting then
+      complete(false)
       return
     end
     pending = request(DISCOVERY, nil, function(response)

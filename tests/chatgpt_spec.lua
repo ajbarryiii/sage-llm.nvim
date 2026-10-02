@@ -510,6 +510,18 @@ describe("ChatGPT subscription provider", function()
     assert.equals(0, calls)
   end)
 
+  it("invalidates a previously delivered catalog's account guard", function()
+    local current
+    provider.list_models(function(_, _, is_current)
+      current = is_current
+    end)
+    requests[1].opts.callback({ status = 200, body = '{"models":[]}' })
+    flush()
+    assert.is_true(current())
+    provider.cancel_all()
+    assert.is_false(current())
+  end)
+
   it("reports sign-in errors without making an HTTP request", function()
     auth_error = "Sign in with :SageChatGPTLogin to connect your ChatGPT plan"
     local result, callbacks = observe()

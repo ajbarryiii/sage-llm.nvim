@@ -53,6 +53,34 @@ describe("response window hide behavior", function()
     assert.same({ "Header", "", "Response line 1", "" }, lines)
   end)
 
+  it("cancels the displayed request by its original provider after a switch", function()
+    response.open("Header")
+    response.show_loading()
+    local cancelled = 0
+    response.set_request_handle({
+      provider = "chatgpt",
+      cancel = function()
+        cancelled = cancelled + 1
+      end,
+    })
+    config.options.provider = "openrouter"
+    response.cancel_stream("chatgpt")
+    assert.equals(1, cancelled)
+    assert.is_false(response.is_streaming())
+
+    response.show_loading()
+    response.set_request_handle({
+      provider = "openrouter",
+      cancel = function()
+        cancelled = cancelled + 1
+      end,
+    })
+    response.cancel_stream("chatgpt")
+    assert.equals(1, cancelled)
+    assert.is_true(response.is_streaming())
+    response.cancel_stream()
+  end)
+
   it("removes the search keymap and footer when the provider lacks search", function()
     response.open("Header")
     response.set_on_toggle_search(function()

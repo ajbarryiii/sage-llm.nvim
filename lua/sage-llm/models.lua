@@ -82,7 +82,7 @@ end
 
 ---Load available models for the authenticated ChatGPT subscription
 function M.select_chatgpt()
-  require("sage-llm.chatgpt").list_models(function(models, err)
+  require("sage-llm.chatgpt").list_models(function(models, err, is_current)
     if err then
       vim.notify("sage-llm: " .. err, vim.log.levels.ERROR)
       return
@@ -106,7 +106,7 @@ function M.select_chatgpt()
         return label
       end,
     }, function(model)
-      if not model then
+      if not model or (is_current and not is_current()) then
         return
       end
       config.set_provider("chatgpt")

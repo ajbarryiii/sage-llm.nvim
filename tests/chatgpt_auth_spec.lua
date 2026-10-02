@@ -647,6 +647,68 @@ describe("ChatGPT subscription authentication", function()
     assert.matches("remote revocation was not confirmed", result[2])
   end)
 
+  it(
+    "completes logout waiting on its own refresh lock before exit and ignores late refresh",
+    function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      deferred_refresh = {}
+      auth.get_access_token(function() end)
+      wait_for(function()
+        return deferred_refresh.options ~= nil
+      end)
+      local result
+      auth.logout(function(ok, err)
+        result = { ok, err }
+      end)
+      assert.is_nil(result)
+      local blocked
+      auth.get_access_token(function(token, err)
+        blocked = { token, err }
+      end)
+      assert.is_nil(blocked[1])
+      assert.matches("sign%-out is in progress", blocked[2])
+      assert.equals(1, #requests)
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "SageChatGPTAuth" })
+      assert.is_false(auth.status().connected)
+      assert.is_true(result[1])
+      assert.matches("remote revocation was not confirmed", result[2])
+      assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+      deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
+      vim.wait(150, function()
+        return false
+      end, 5)
+      assert.is_nil(saved_credentials().refresh_token)
+      assert.is_nil(saved_credentials().pending_refresh)
+      assert.equals(1, #requests)
+    end
+  )
+
+  it(
+    "suppresses a successful refresh callback already queued when exiting with pending logout",
+    function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      deferred_refresh = {}
+      auth.get_access_token(function() end)
+      wait_for(function()
+        return deferred_refresh.options ~= nil
+      end)
+      auth.logout(function() end)
+      deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "SageChatGPTAuth" })
+      assert.is_false(auth.status().connected)
+      vim.wait(150, function()
+        return false
+      end, 5)
+      assert.is_nil(saved_credentials().refresh_token)
+      assert.is_nil(saved_credentials().pending_refresh)
+      assert.equals(1, #requests)
+    end
+  )
+
   it("reports local logout storage failure before attempting remote revocation", function()
     write_credentials(record())
     local original_rename = uv.fs_rename
