@@ -122,12 +122,21 @@ local function read_file(path)
   if info.type ~= "file" or info.size > 1048576 then
     return nil, "Invalid ChatGPT credential storage"
   end
-  if not uv.fs_chmod(path, 384) then
-    return nil, "Could not protect ChatGPT credential storage"
-  end
   local fd = uv.fs_open(path, "r", 384)
   if not fd then
     return nil, "Could not read ChatGPT credential storage"
+  end
+  -- Another process can atomically replace the path between lstat and open.
+  -- Read and protect the opened inode, including its own size, so a complete
+  -- replacement is never truncated using the preceding file's metadata.
+  info = uv.fs_fstat(fd)
+  if not info or info.type ~= "file" or info.size > 1048576 then
+    uv.fs_close(fd)
+    return nil, "Invalid ChatGPT credential storage"
+  end
+  if not uv.fs_fchmod(fd, 384) then
+    uv.fs_close(fd)
+    return nil, "Could not protect ChatGPT credential storage"
   end
   local data = uv.fs_read(fd, info.size, 0)
   uv.fs_close(fd)
@@ -454,6 +463,29 @@ local function unlock(fd)
   uv.fs_close(fd)
 end
 
+---Only run while holding session.lock. Every token-bearing OAuth POST holds
+---that lock until its request file is removed, so remaining files are orphaned.
+local function cleanup_orphaned_secrets(path, include_credentials)
+  local entries = uv.fs_scandir(path)
+  if not entries then
+    return nil, "Could not inspect abandoned ChatGPT credential files"
+  end
+  while true do
+    local name = uv.fs_scandir_next(entries)
+    if not name then
+      return true
+    end
+    local request_file = name:match("^%.request%-[%w_-]+$")
+    local credential_file = include_credentials and name:match("^credentials%.json%.[%w_-]+$")
+    if request_file or credential_file then
+      -- Unlink the entry itself, without following a symlink or reading secrets.
+      if not uv.fs_unlink(path .. "/" .. name) then
+        return nil, "Could not remove abandoned ChatGPT credential files. Check file permissions"
+      end
+    end
+  end
+end
+
 -- Protect rotating refresh tokens across Neovim instances, as well as locally.
 local function acquire_lock(callback, immediate)
   local path, err = ensure_directory()
@@ -492,6 +524,12 @@ local function acquire_lock(callback, immediate)
       return
     end
     if flock(fd, 6) == 0 then -- LOCK_EX | LOCK_NB
+      local cleaned, cleanup_err = cleanup_orphaned_secrets(path, false)
+      if not cleaned then
+        flock(fd, 8)
+        finish(nil, cleanup_err)
+        return
+      end
       local released = false
       local release
       release = function()
@@ -1132,6 +1170,13 @@ function M.logout(callback)
       return
     end
     release_lock = release
+    -- Explicit sign-out also removes abandoned atomic credential writes, which
+    -- can contain an access/refresh token even when credentials.json is clear.
+    local cleaned, cleanup_err = cleanup_orphaned_secrets(directory(), true)
+    if not cleaned then
+      finish(false, cleanup_err)
+      return
+    end
     local record, err = credentials()
     if not record then
       finish(not err, err)

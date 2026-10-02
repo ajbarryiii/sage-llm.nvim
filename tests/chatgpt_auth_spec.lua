@@ -278,6 +278,40 @@ describe("ChatGPT subscription authentication", function()
     assert.equals(0, #requests)
   end)
 
+  it(
+    "reads a complete credential snapshot when another instance replaces the path before open",
+    function()
+      write_credentials(record())
+      local replacement = record()
+      replacement.access_token = "renewed-access-with-a-longer-value-than-the-previous-token"
+      replacement.refresh_token = "renewed-refresh-with-a-longer-value-than-the-previous-token"
+      local temporary = auth_dir .. "/replacement.json"
+      vim.fn.writefile({ vim.json.encode(replacement) }, temporary)
+      uv.fs_chmod(temporary, 384)
+      local original = uv.fs_open
+      local replaced = false
+      uv.fs_open = function(path, flags, mode)
+        if path == auth_dir .. "/credentials.json" and flags == "r" and not replaced then
+          replaced = true
+          assert(uv.fs_rename(temporary, path))
+        end
+        return original(path, flags, mode)
+      end
+      local token, failure
+      local ok, err = pcall(function()
+        auth.get_access_token(function(value, message)
+          token, failure = value, message
+        end)
+      end)
+      uv.fs_open = original
+      assert.is_true(ok, err)
+      assert.is_true(replaced)
+      assert.equals(replacement.access_token, token)
+      assert.is_nil(failure)
+      assert.equals(0, #requests)
+    end
+  )
+
   it("registers with PKCE, verifies identity, and saves owner-only credentials", function()
     local result
     auth.login(function(ok, err)
@@ -654,6 +688,89 @@ describe("ChatGPT subscription authentication", function()
     assert.is_nil(result[2]:find("sensitive", 1, true))
     assert.is_false(auth.status().connected)
     assert.equals("oaiapp_existing", saved_credentials().client_id)
+  end)
+
+  it("removes crash-orphaned OAuth forms and credential copies before local sign-out", function()
+    write_credentials(record())
+    local orphan = auth_dir .. "/.request-crashed-process"
+    local temporary = auth_dir .. "/credentials.json.crashed-process"
+    vim.fn.writefile({ "refresh_token=old-refresh" }, orphan)
+    vim.fn.writefile({ vim.json.encode(record()) }, temporary)
+    uv.fs_chmod(orphan, 384)
+    uv.fs_chmod(temporary, 384)
+    vim.fn.writefile({ "unrelated metadata" }, auth_dir .. "/keep.txt")
+    discovery = "unavailable"
+    local result
+    auth.logout(function(ok, err)
+      result = { ok, err }
+    end)
+    assert.is_nil(uv.fs_stat(orphan))
+    assert.is_nil(uv.fs_stat(temporary))
+    assert.is_nil(saved_credentials().refresh_token)
+    assert.is_not_nil(uv.fs_stat(auth_dir .. "/keep.txt"))
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.is_true(result[1])
+    assert.matches("not confirmed", result[2])
+  end)
+
+  it(
+    "preserves another instance's active request file and removes it only after lock recovery",
+    function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      local release = hold_session_lock()
+      local orphan = auth_dir .. "/.request-other-process"
+      vim.fn.writefile({ "refresh_token=old-refresh" }, orphan)
+      uv.fs_chmod(orphan, 384)
+      local post = package.loaded["plenary.curl"].post
+      package.loaded["plenary.curl"].post = function(url, opts)
+        assert.is_nil(uv.fs_stat(orphan))
+        assert.is_not_nil(uv.fs_stat(opts.body))
+        return post(url, opts)
+      end
+      local result
+      auth.get_access_token(function(token, err)
+        result = { token, err }
+      end)
+      assert.is_not_nil(uv.fs_stat(orphan))
+      assert.equals(0, #requests)
+      release()
+      wait_for(function()
+        return result ~= nil
+      end)
+      assert.same({ "new-access" }, result)
+      assert.is_nil(uv.fs_stat(orphan))
+      assert_session_unlocked()
+    end
+  )
+
+  it("reports failed secret-file removal instead of claiming successful local sign-out", function()
+    write_credentials(record())
+    local orphan = auth_dir .. "/.request-crashed-process"
+    vim.fn.writefile({ "refresh_token=old-refresh" }, orphan)
+    uv.fs_chmod(orphan, 384)
+    local unlink = uv.fs_unlink
+    uv.fs_unlink = function(path)
+      if path == orphan then
+        return nil, "unlink denied"
+      end
+      return unlink(path)
+    end
+    local result
+    local ok, err = pcall(function()
+      auth.logout(function(signed_out, message)
+        result = { signed_out, message }
+      end)
+    end)
+    uv.fs_unlink = unlink
+    assert.is_true(ok, err)
+    assert.is_false(result[1])
+    assert.matches("Could not remove abandoned", result[2])
+    assert.equals(0, #requests)
+    assert_session_unlocked()
   end)
 
   it("revokes logout and retains the account registration and host", function()

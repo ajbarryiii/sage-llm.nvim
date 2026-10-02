@@ -84,7 +84,7 @@ This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/s
 
 No Codex CLI or OpenAI API key is needed. ChatGPT sign-in currently supports macOS/Linux and requires `openssl` on your PATH. On macOS, if it is missing, install it with `brew install openssl` and add its `bin` directory to your PATH.
 
-OS-managed advisory locks serialize credential updates and release automatically on process exit. ChatGPT sign-in requires a LuaJIT build of Neovim.
+OS-managed advisory locks serialize credential updates and release automatically on process exit. Recovery removes abandoned OAuth request files under the lock; logout also removes abandoned credential copies. ChatGPT sign-in requires a LuaJIT build of Neovim.
 
 Credentials are stored separately from your Lua configuration in `stdpath("data")/sage-llm/chatgpt`, using owner-only permissions and atomic writes. Access tokens refresh automatically. Browser sign-in uses PKCE and validates the returned identity; credentials are never read from other apps. Do not commit or share this directory. Subscription requests send the prompt and conversation history with `store = false`; Sage supplies no tools. Repository embeddings/RAG and the OpenRouter web-search toggle are unavailable with this provider.
 
