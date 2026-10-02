@@ -9,7 +9,14 @@ describe("ChatGPT subscription provider", function()
   local defer_auth
   local auth_error
   local account_current
-  local modules = { "sage-llm.config", "sage-llm.chatgpt_auth", "plenary.curl", "sage-llm.chatgpt" }
+  local auth_dir
+  local modules = {
+    "sage-llm.config",
+    "sage-llm.chatgpt_auth",
+    "sage-llm.chatgpt_transport",
+    "plenary.curl",
+    "sage-llm.chatgpt",
+  }
 
   local function flush()
     while #scheduled > 0 do
@@ -87,9 +94,10 @@ describe("ChatGPT subscription provider", function()
   end
 
   before_each(function()
+    auth_dir = vim.fn.tempname()
     options = {
       model = "openrouter/unrelated-model",
-      chatgpt = { model = "account-model", request_timeout_ms = 12345 },
+      chatgpt = { model = "account-model", request_timeout_ms = 12345, auth_dir = auth_dir },
     }
     requests = {}
     scheduled = {}
@@ -145,6 +153,7 @@ describe("ChatGPT subscription provider", function()
   end)
 
   after_each(function()
+    provider.cancel_all()
     -- Also remove fixture header files from requests that the test left open.
     for _, item in ipairs(requests) do
       if item.body_path then
@@ -158,6 +167,7 @@ describe("ChatGPT subscription provider", function()
       package.preload[name] = originals.preload[name]
     end
     vim.schedule = originals.schedule
+    vim.fn.delete(auth_dir, "rf")
   end)
 
   it("uses the Responses contract and carries all follow-up history", function()

@@ -616,6 +616,10 @@ end
 ---@param opts SageConfig|nil User configuration
 function M.setup(opts)
   config.setup(opts)
+  local cleaned, err = require("sage-llm.chatgpt_transport").cleanup_orphans()
+  if not cleaned then
+    vim.notify("sage-llm: " .. err, vim.log.levels.WARN)
+  end
 end
 
 ---Get the path to the config file

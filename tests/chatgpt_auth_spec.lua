@@ -141,6 +141,7 @@ describe("ChatGPT subscription authentication", function()
       "sage-llm.config",
       "plenary.curl",
       "sage-llm.chatgpt_crypto",
+      "sage-llm.chatgpt_transport",
       "sage-llm.chatgpt_auth",
     }) do
       originals[name] = package.loaded[name]
@@ -561,6 +562,149 @@ describe("ChatGPT subscription authentication", function()
     assert.matches("not granted", result[2])
     assert.is_false(auth.status().connected)
     assert.equals(1, #requests)
+  end)
+
+  for _, new_account in ipairs({ false, true }) do
+    it(
+      "requests consent when retrying a first declined plan grant (new_account="
+        .. tostring(new_account)
+        .. ")",
+      function()
+        local valid_tokens = vim.deepcopy(token_response)
+        token_response.scope = "openid profile email offline_access resource.invoke"
+        local failed
+        auth.login(function(ok, err)
+          failed = { ok, err }
+        end, { new_account = new_account })
+        assert.is_nil(query(opened).prompt)
+        callback_request()
+        wait_for(function()
+          return failed ~= nil
+        end)
+        assert.is_false(failed[1])
+        assert.is_false(auth.status().connected)
+        local consent_path = auth_dir .. "/consent.json"
+        local consent = vim.json.decode(table.concat(vim.fn.readfile(consent_path), "\n"))
+        assert.is_true(consent.clients.oaiapp_registered)
+        assert.equals(384, uv.fs_stat(consent_path).mode % 512)
+        package.loaded["sage-llm.chatgpt_auth"] = nil
+        auth = require("sage-llm.chatgpt_auth")
+        token_response = valid_tokens
+        local result
+        auth.login(function(ok, err)
+          result = { ok, err }
+        end, { new_account = new_account })
+        local retry = query(opened)
+        assert.equals("oaiapp_registered", retry.client_id)
+        assert.equals("consent", retry.prompt)
+        assert.is_nil(retry.force_reconsent)
+        callback_request({ code = "approved-code", state = retry.state })
+        wait_for(function()
+          return result ~= nil
+        end)
+        assert.is_true(result[1])
+        auth.login(function() end)
+        assert.equals("oaiapp_registered", query(opened).client_id)
+        assert.is_nil(query(opened).prompt)
+        auth.cancel_login()
+      end
+    )
+  end
+
+  it(
+    "requests consent for a declined returning grant without replacing active credentials",
+    function()
+      local active = record()
+      write_credentials(active)
+      token_response.scope = "openid profile email offline_access resource.invoke"
+      local failed
+      auth.login(function(ok, err)
+        failed = { ok, err }
+      end)
+      callback_request({ code = "declined-code", state = query(opened).state })
+      wait_for(function()
+        return failed ~= nil
+      end)
+      assert.is_false(failed[1])
+      assert.same(active, saved_credentials())
+      auth.login(function() end)
+      assert.equals(active.client_id, query(opened).client_id)
+      assert.equals("consent", query(opened).prompt)
+      auth.cancel_login()
+    end
+  )
+
+  it(
+    "binds a new account's consent retry to its client without forcing the active account",
+    function()
+      local active = record()
+      write_credentials(active)
+      token_response.scope = "openid profile email offline_access resource.invoke"
+      local failed
+      auth.login(function(ok, err)
+        failed = { ok, err }
+      end, { new_account = true })
+      callback_request()
+      wait_for(function()
+        return failed ~= nil
+      end)
+      assert.is_false(failed[1])
+      assert.same(active, saved_credentials())
+      auth.login(function() end)
+      assert.equals(active.client_id, query(opened).client_id)
+      assert.is_nil(query(opened).prompt)
+      auth.cancel_login()
+      auth.login(function() end, { new_account = true })
+      assert.equals("oaiapp_registered", query(opened).client_id)
+      assert.equals("consent", query(opened).prompt)
+      auth.cancel_login()
+    end
+  )
+
+  it(
+    "disables an unusable renewal and requests consent when plan permission is withdrawn",
+    function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      token_response.scope = "openid profile email offline_access resource.invoke"
+      local result
+      auth.get_access_token(function(token, err)
+        result = { token = token, err = err }
+      end)
+      wait_for(function()
+        return result ~= nil
+      end)
+      assert.is_nil(result.token)
+      assert.matches("not granted", result.err)
+      assert.is_false(auth.status().connected)
+      assert.is_nil(saved_credentials().refresh_token)
+      auth.login(function() end)
+      assert.equals(expired.client_id, query(opened).client_id)
+      assert.equals("consent", query(opened).prompt)
+      auth.cancel_login()
+    end
+  )
+
+  it("retains a received permission-withdrawal result when exit precedes its callback", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    write_credentials(expired)
+    token_response.scope = "openid profile email offline_access resource.invoke"
+    deferred_refresh = {}
+    auth.get_access_token(function() end)
+    wait_for(function()
+      return deferred_refresh.options ~= nil
+    end)
+    deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
+    vim.api.nvim_exec_autocmds("VimLeavePre", { group = "SageChatGPTAuth" })
+    assert.is_nil(saved_credentials().refresh_token)
+    package.loaded["sage-llm.chatgpt_auth"] = nil
+    auth = require("sage-llm.chatgpt_auth")
+    auth.login(function() end)
+    assert.equals(expired.client_id, query(opened).client_id)
+    assert.equals("consent", query(opened).prompt)
+    auth.cancel_login()
   end)
 
   it("preserves an active connection when returning identity verification fails", function()

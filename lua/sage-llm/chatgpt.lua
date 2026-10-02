@@ -1,6 +1,7 @@
 local config = require("sage-llm.config")
 local auth = require("sage-llm.chatgpt_auth")
 local curl = require("plenary.curl")
+local transport = require("sage-llm.chatgpt_transport")
 
 local M = {}
 local base_url = "https://api.openai.com/v1"
@@ -47,18 +48,16 @@ local function new_request()
   local state = { cancelled = false, finished = false, handles = {}, epoch = request_epoch }
   function state.cleanup()
     active_requests[state] = nil
-    if state.body_path then
-      uv.fs_unlink(state.body_path)
-      state.body_path = nil
+    if state.storage then
+      local removed, err = state.storage.release()
+      state.storage = nil
+      if not removed then
+        vim.schedule(function()
+          vim.notify("sage-llm: " .. err, vim.log.levels.WARN)
+        end)
+      end
     end
-    if state.header_path then
-      uv.fs_unlink(state.header_path)
-      state.header_path = nil
-    end
-    if state.header_dir then
-      uv.fs_rmdir(state.header_dir)
-      state.header_dir = nil
-    end
+    state.body_path, state.header_path, state.header_dir = nil, nil, nil
   end
   function state.track(handle)
     if state.cancelled or state.finished then
@@ -136,10 +135,11 @@ local function prepare_credentials(state, token)
   if type(token) ~= "string" or token == "" or token:find("[\r\n]") then
     return false
   end
-  state.header_dir = uv.fs_mkdtemp(uv.os_tmpdir() .. "/sage-llm-chatgpt-XXXXXX")
-  if not state.header_dir then
+  state.storage = transport.create()
+  if not state.storage then
     return false
   end
+  state.header_dir = state.storage.path
   state.header_path =
     write_private_file(state, "headers", "Authorization: Bearer " .. token .. "\n")
   return state.header_path ~= nil
@@ -330,7 +330,10 @@ function M.list_models(callback)
       return
     end
     if not prepare_credentials(state, token) then
-      finish(nil, "Could not securely prepare the ChatGPT request. Check your temporary directory.")
+      finish(
+        nil,
+        "Could not securely prepare the ChatGPT request. Check your ChatGPT data directory."
+      )
       return
     end
     fetch_models(state, finish)
@@ -448,7 +451,7 @@ function M.stream_chat(messages, callbacks, request_opts)
     body.model = model
     state.body_path = write_private_file(state, "body", vim.json.encode(body))
     if not state.body_path then
-      finish("Could not securely prepare the ChatGPT request. Check your temporary directory.")
+      finish("Could not securely prepare the ChatGPT request. Check your ChatGPT data directory.")
       return
     end
     local text_parts = {}
@@ -615,7 +618,7 @@ function M.stream_chat(messages, callbacks, request_opts)
       return
     end
     if not prepare_credentials(state, token) then
-      finish("Could not securely prepare the ChatGPT request. Check your temporary directory.")
+      finish("Could not securely prepare the ChatGPT request. Check your ChatGPT data directory.")
       return
     end
     local model = (config.options.chatgpt or {}).model

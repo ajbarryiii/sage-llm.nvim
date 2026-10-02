@@ -409,6 +409,50 @@ local function token_error(response)
   return "OpenAI could not authorize your ChatGPT plan. Try signing in again"
 end
 
+local function consent_requirements()
+  local saved, err = read_json(directory() .. "/consent.json")
+  if err then
+    return nil, err
+  end
+  saved = saved or { issuer = ISSUER, clients = {} }
+  if saved.issuer ~= ISSUER or type(saved.clients) ~= "table" then
+    return nil, "Invalid ChatGPT consent metadata"
+  end
+  for client_id, required in pairs(saved.clients) do
+    if type(client_id) ~= "string" or required ~= true then
+      return nil, "Invalid ChatGPT consent metadata"
+    end
+  end
+  return saved
+end
+
+-- Only update under session.lock; this contains public client IDs, never tokens.
+local function require_consent(client_id, required)
+  local saved, err = consent_requirements()
+  if not saved then
+    return nil, err
+  end
+  if not required and not saved.clients[client_id] then
+    return true
+  end
+  saved.clients[client_id] = required and true or nil
+  return save_record(directory() .. "/consent.json", saved)
+end
+
+local function disable_plan_permission(current)
+  local marked, err = require_consent(current.client_id, true)
+  if not marked then
+    return nil, err
+  end
+  current.access_token = nil
+  current.refresh_token = nil
+  current.id_token = nil
+  current.expires_at = nil
+  current.pending_refresh = nil
+  current.scopes = {}
+  return save_record(directory() .. "/credentials.json", current)
+end
+
 local function validate_tokens(data, previous)
   if type(data) ~= "table" or type(data.access_token) ~= "string" or data.access_token == "" then
     return nil, "OpenAI returned invalid ChatGPT credentials"
@@ -433,7 +477,9 @@ local function validate_tokens(data, previous)
   end
   local scopes = scopes_from(data.scope) or (previous and previous.scopes)
   if not has_plan_scope(scopes) then
-    return nil, "ChatGPT plan usage was not granted. Sign in again and allow ChatGPT plan usage"
+    return nil,
+      "ChatGPT plan usage was not granted. Sign in again and allow ChatGPT plan usage",
+      type(scopes) == "table"
   end
   return scopes
 end
@@ -710,7 +756,13 @@ function M.get_access_token(callback)
     end
     local start_refresh
     local function verify_and_save(data, received_at, staged)
-      local granted, validation_err = validate_tokens(data, current)
+      local granted, validation_err, needs_consent = validate_tokens(data, current)
+      if needs_consent then
+        local marked, mark_err = disable_plan_permission(current)
+        release()
+        finish(nil, not marked and mark_err or validation_err)
+        return
+      end
       if
         not granted
         or type(received_at) ~= "number"
@@ -808,7 +860,15 @@ function M.get_access_token(callback)
         verify_and_save(data, received_at, false)
       end, function(response, network_err, received_at)
         local data = decode_response(response)
-        if network_err or response.status ~= 200 or not validate_tokens(data, current) then
+        if network_err or response.status ~= 200 then
+          return
+        end
+        local granted, _, needs_consent = validate_tokens(data, current)
+        if needs_consent then
+          disable_plan_permission(current)
+          return
+        end
+        if not granted then
           return
         end
         -- Do not activate credentials or perform network requests during exit.
@@ -924,6 +984,11 @@ function M.login(callback, opts)
   end
   local selected_client_id = previous and previous.client_id
     or registration and registration.client_id
+  local consent, consent_err = consent_requirements()
+  if not consent then
+    callback(false, consent_err)
+    return { cancel = function() end }
+  end
   local state = crypto.random_token()
   local nonce = crypto.random_token()
   local verifier = crypto.random_token()
@@ -992,6 +1057,7 @@ function M.login(callback, opts)
     nonce = nonce,
     code_challenge_method = "S256",
     code_challenge = challenge,
+    prompt = selected_client_id and consent.clients[selected_client_id] and "consent" or nil,
   }
   if previous then
     values.login_hint = previous.email
@@ -1056,8 +1122,14 @@ function M.login(callback, opts)
           return
         end
         local data = decode_response(response)
-        local granted, validation_err = validate_tokens(data)
+        local granted, validation_err, needs_consent = validate_tokens(data)
         if not granted or type(data.id_token) ~= "string" then
+          if needs_consent and type(data.id_token) == "string" then
+            local marked, mark_err = require_consent(client_id, true)
+            if not marked then
+              validation_err = mark_err
+            end
+          end
           finish(false, validation_err or "OpenAI did not return a verifiable ChatGPT identity")
           return
         end
@@ -1074,6 +1146,11 @@ function M.login(callback, opts)
           })
           if not payload then
             finish(false, keys_err or "OpenAI returned an invalid ChatGPT identity")
+            return
+          end
+          local cleared, clear_err = require_consent(client_id, false)
+          if not cleared then
+            finish(false, clear_err)
             return
           end
           local saved_ok, save_err = save_record(directory() .. "/credentials.json", {
@@ -1251,6 +1328,11 @@ function M.logout(callback)
     -- Explicit sign-out also removes abandoned atomic credential writes, which
     -- can contain an access/refresh token even when credentials.json is clear.
     local cleaned, cleanup_err = cleanup_orphaned_secrets(directory(), true)
+    if not cleaned then
+      finish(false, cleanup_err)
+      return
+    end
+    cleaned, cleanup_err = require("sage-llm.chatgpt_transport").cleanup_orphans()
     if not cleaned then
       finish(false, cleanup_err)
       return
