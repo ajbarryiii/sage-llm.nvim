@@ -457,9 +457,6 @@ local function validate_tokens(data, previous)
   if type(data) ~= "table" or type(data.access_token) ~= "string" or data.access_token == "" then
     return nil, "OpenAI returned invalid ChatGPT credentials"
   end
-  if type(data.refresh_token) ~= "string" or data.refresh_token == "" then
-    return nil, "OpenAI did not grant renewable access. Sign in again"
-  end
   if type(data.token_type) ~= "string" or data.token_type:lower() ~= "bearer" then
     return nil, "OpenAI returned an unsupported credential type"
   end
@@ -480,6 +477,11 @@ local function validate_tokens(data, previous)
     return nil,
       "ChatGPT plan usage was not granted. Sign in again and allow ChatGPT plan usage",
       type(scopes) == "table"
+  end
+  -- Identity-only grants can omit offline_access and the refresh token. Retain
+  -- their declined-plan consent requirement before checking renewable access.
+  if type(data.refresh_token) ~= "string" or data.refresh_token == "" then
+    return nil, "OpenAI did not grant renewable access. Sign in again"
   end
   return scopes
 end

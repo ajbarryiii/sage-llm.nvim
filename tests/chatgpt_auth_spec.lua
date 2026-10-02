@@ -611,6 +611,67 @@ describe("ChatGPT subscription authentication", function()
     )
   end
 
+  for _, returning in ipairs({ false, true }) do
+    it(
+      "recovers an identity-only grant without a refresh token (returning="
+        .. tostring(returning)
+        .. ")",
+      function()
+        local active = returning and record() or nil
+        if active then
+          write_credentials(active)
+        end
+        local valid_tokens = vim.deepcopy(token_response)
+        token_response.scope = "openid profile email"
+        token_response.refresh_token = nil
+        local failed
+        auth.login(function(ok, err)
+          failed = { ok, err }
+        end)
+        local params = query(opened)
+        local client_id = active and active.client_id or "oaiapp_registered"
+        callback_request({
+          code = "identity-only-code",
+          state = params.state,
+          client_id = not active and client_id or nil,
+        })
+        wait_for(function()
+          return failed ~= nil
+        end)
+        assert.is_false(failed[1])
+        assert.matches("not granted", failed[2])
+        if active then
+          assert.same(active, saved_credentials())
+        else
+          assert.is_false(auth.status().connected)
+        end
+        local consent_path = auth_dir .. "/consent.json"
+        local consent = vim.json.decode(table.concat(vim.fn.readfile(consent_path), "\n"))
+        assert.is_true(consent.clients[client_id])
+        assert.equals(384, uv.fs_stat(consent_path).mode % 512)
+        package.loaded["sage-llm.chatgpt_auth"] = nil
+        auth = require("sage-llm.chatgpt_auth")
+        token_response = valid_tokens
+        local result
+        auth.login(function(ok, err)
+          result = { ok, err }
+        end)
+        local retry = query(opened)
+        assert.equals(client_id, retry.client_id)
+        assert.equals("consent", retry.prompt)
+        callback_request({ code = "approved-code", state = retry.state })
+        wait_for(function()
+          return result ~= nil
+        end)
+        assert.is_true(result[1])
+        assert.equals("new-refresh", saved_credentials().refresh_token)
+        auth.login(function() end)
+        assert.is_nil(query(opened).prompt)
+        auth.cancel_login()
+      end
+    )
+  end
+
   it(
     "requests consent for a declined returning grant without replacing active credentials",
     function()
