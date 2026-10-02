@@ -567,6 +567,10 @@ end
 
 ---Remove Sage's saved ChatGPT credentials.
 function M.chatgpt_logout()
+  if config.options.provider == "chatgpt" then
+    ui.response.cancel_stream()
+  end
+  require("sage-llm.chatgpt").cancel_all()
   require("sage-llm.chatgpt_auth").logout(function(ok, err)
     vim.notify(
       "sage-llm: " .. (err or (ok and "Signed out of ChatGPT" or "ChatGPT sign-out failed")),

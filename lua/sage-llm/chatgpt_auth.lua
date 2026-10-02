@@ -523,7 +523,7 @@ function M.get_access_token(callback)
     callback(nil, read_err or SIGN_IN)
     return handle
   end
-  if record.expires_at > os.time() + 60 then
+  if not record.pending_refresh and record.expires_at > os.time() + 60 then
     callback(record.access_token)
     return handle
   end
@@ -558,51 +558,59 @@ function M.get_access_token(callback)
       finish(nil, "ChatGPT account changed while renewing access. Try again")
       return
     end
-    if current.expires_at > os.time() + 60 then
-      release()
-      finish(current.access_token)
-      return
-    end
-    request(TOKEN, {
-      grant_type = "refresh_token",
-      client_id = current.client_id,
-      refresh_token = current.refresh_token,
-      resource = RESOURCE,
-    }, function(response, network_err)
-      local data = decode_response(response)
-      if network_err or not response or response.status ~= 200 then
-        if data and data.error == "invalid_grant" then
-          current.access_token = nil
-          current.refresh_token = nil
-          current.id_token = nil
-          current.expires_at = nil
-          current.scopes = {}
-          save_record(directory() .. "/credentials.json", current)
-        end
+    local start_refresh
+    local function verify_and_save(data, received_at, staged)
+      local granted, validation_err = validate_tokens(data, current)
+      if
+        not granted
+        or type(received_at) ~= "number"
+        or received_at ~= received_at
+        or received_at <= 0
+        or received_at > os.time() + 60
+      then
         release()
-        finish(nil, network_err or token_error(response))
+        finish(nil, validation_err or "Invalid pending ChatGPT renewal")
         return
       end
-      local granted, validation_err = validate_tokens(data, current)
-      if not granted then
-        release()
-        finish(nil, validation_err)
-        return
+      -- A successful exchange consumes the previous refresh token. Securely
+      -- retain its replacement before any further network request, without
+      -- making the unverified identity or access token available to callers.
+      if not staged then
+        current.pending_refresh = { tokens = data, received_at = received_at }
+        local ok, save_err = save_record(directory() .. "/credentials.json", current)
+        if not ok then
+          release()
+          finish(nil, save_err)
+          return
+        end
       end
       local function save(payload)
         local renewed = vim.deepcopy(current)
+        renewed.pending_refresh = nil
         renewed.access_token = data.access_token
         renewed.refresh_token = data.refresh_token
         renewed.token_type = "Bearer"
-        renewed.expires_at = os.time() + data.expires_in
+        renewed.expires_at = received_at + data.expires_in
         renewed.scopes = granted
         if data.id_token then
           renewed.id_token = data.id_token
           renewed.email = type(payload.email) == "string" and payload.email or current.email
         end
         local ok, save_err = save_record(directory() .. "/credentials.json", renewed)
+        if not ok then
+          release()
+          finish(nil, save_err)
+          return
+        end
+        current = renewed
+        if renewed.expires_at <= os.time() then
+          -- Recovery can happen after the staged access token has expired.
+          -- Rotate the verified replacement rather than reuse the consumed one.
+          start_refresh()
+          return
+        end
         release()
-        finish(ok and renewed.access_token or nil, save_err)
+        finish(renewed.access_token)
       end
       if not data.id_token then
         save({})
@@ -613,7 +621,9 @@ function M.get_access_token(callback)
           issuer = ISSUER,
           audience = current.client_id,
           subject = current.subject,
-          time = os.time(),
+          -- Verify validity at receipt; a network outage must not make a
+          -- securely staged, otherwise valid identity impossible to recover.
+          time = received_at,
         })
         if not payload then
           release()
@@ -622,7 +632,46 @@ function M.get_access_token(callback)
         end
         save(payload)
       end)
-    end)
+    end
+    start_refresh = function()
+      request(TOKEN, {
+        grant_type = "refresh_token",
+        client_id = current.client_id,
+        refresh_token = current.refresh_token,
+        resource = RESOURCE,
+      }, function(response, network_err)
+        local data = decode_response(response)
+        if network_err or not response or response.status ~= 200 then
+          if data and data.error == "invalid_grant" then
+            current.access_token = nil
+            current.refresh_token = nil
+            current.id_token = nil
+            current.expires_at = nil
+            current.scopes = {}
+            current.pending_refresh = nil
+            save_record(directory() .. "/credentials.json", current)
+          end
+          release()
+          finish(nil, network_err or token_error(response))
+          return
+        end
+        verify_and_save(data, os.time(), false)
+      end)
+    end
+    if current.pending_refresh then
+      local pending = current.pending_refresh
+      if type(pending) ~= "table" then
+        release()
+        finish(nil, "Invalid pending ChatGPT renewal")
+        return
+      end
+      verify_and_save(pending.tokens, pending.received_at, true)
+    elseif current.expires_at > os.time() + 60 then
+      release()
+      finish(current.access_token)
+    else
+      start_refresh()
+    end
   end)
   return handle
 end
@@ -963,7 +1012,12 @@ function M.logout(callback)
       finish(not err, err)
       return
     end
-    local refresh_token = record.refresh_token
+    local staged_refresh = record.pending_refresh
+    local refresh_token = type(staged_refresh) == "table"
+        and type(staged_refresh.tokens) == "table"
+        and staged_refresh.tokens.refresh_token
+      or record.refresh_token
+    record.pending_refresh = nil
     record.access_token = nil
     record.refresh_token = nil
     record.id_token = nil

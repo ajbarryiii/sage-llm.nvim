@@ -13,6 +13,7 @@ describe("subscription conversation recovery", function()
 
     "sage-llm.conversation",
     "sage-llm.chatgpt_auth",
+    "sage-llm.chatgpt",
     "sage-llm.config_file",
   }
   local requests, current_handle, cancelled, errors, question
@@ -87,6 +88,11 @@ describe("subscription conversation recovery", function()
         set_on_followup = function() end,
         set_on_toggle_search = function() end,
         set_search_enabled = function() end,
+        cancel_stream = function()
+          if current_handle then
+            current_handle.cancel()
+          end
+        end,
         set_request_handle = function(handle)
           current_handle = handle
         end,
@@ -107,6 +113,7 @@ describe("subscription conversation recovery", function()
     for _, name in ipairs({ "actions", "models", "infill", "rag" }) do
       stub("sage-llm." .. name, {})
     end
+    stub("sage-llm.chatgpt", { cancel_all = function() end })
     conversation = require("sage-llm.conversation")
     sage = require("sage-llm")
     sage.ask()
@@ -213,6 +220,32 @@ describe("subscription conversation recovery", function()
     assert.matches("test@example.com", notifications[1], 1, true)
     assert.matches("account-model", notifications[1], 1, true)
     assert.is_nil(notifications[1]:find("sensitive-token", 1, true))
+  end)
+
+  it("cancels conversation and subscription operations before clearing credentials", function()
+    question = "follow-up"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    local events = {}
+    stub("sage-llm.chatgpt", {
+      cancel_all = function()
+        assert.equals(1, cancelled)
+        events[#events + 1] = "cancel"
+      end,
+    })
+    stub("sage-llm.chatgpt_auth", {
+      logout = function(callback)
+        events[#events + 1] = "logout"
+        callback(true)
+      end,
+    })
+    sage.chatgpt_logout()
+    requests[2].callbacks.on_complete()
+    assert.same({ "cancel", "logout" }, events)
+    local messages = conversation.add_followup("retry")
+    assert.equals(3, #messages)
+    assert.equals("\ninitial answer", messages[2].content)
+    assert.equals("retry", messages[3].content)
   end)
 
   it("reports unconfirmed remote revocation after local sign-out", function()

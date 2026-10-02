@@ -460,6 +460,56 @@ describe("ChatGPT subscription provider", function()
     assert.is_true(requests[1].cancelled)
   end)
 
+  it("cancels pending discovery so sign-out cannot start a later inference request", function()
+    options.chatgpt.model = nil
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "selected code" } }, callbacks)
+    assert.equals(1, #requests)
+    provider.cancel_all()
+    requests[1].opts.callback({
+      status = 200,
+      body = '{"models":[{"slug":"model-a","display_name":"A","visibility":"list"}]}',
+    })
+    flush()
+    assert.equals(1, #requests)
+    assert.is_true(requests[1].cancelled)
+    assert.equals("sigterm", requests[1].signal)
+    assert.same({}, result.tokens)
+    assert.equals(0, result.completions)
+  end)
+
+  it("stops active streams and invalidates already queued completions on sign-out", function()
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+    emit(requests[1], { type = "response.output_text.delta", delta = "queued" })
+    provider.cancel_all()
+    complete(requests[1])
+    assert.is_true(requests[1].cancelled)
+    assert.same({}, result.tokens)
+    assert.equals(0, result.completions)
+
+    local next_result, next_callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "New account" } }, next_callbacks)
+    emit(requests[2], { type = "response.output_text.delta", delta = "answer" })
+    emit(requests[2], { type = "response.completed", response = { status = "completed" } })
+    requests[2].opts.callback({ status = 200, body = "" })
+    provider.cancel_all()
+    flush()
+    assert.same({}, next_result.tokens)
+    assert.equals(0, next_result.completions)
+  end)
+
+  it("invalidates a queued model picker result on sign-out", function()
+    local calls = 0
+    provider.list_models(function()
+      calls = calls + 1
+    end)
+    requests[1].opts.callback({ status = 200, body = '{"models":[]}' })
+    provider.cancel_all()
+    flush()
+    assert.equals(0, calls)
+  end)
+
   it("reports sign-in errors without making an HTTP request", function()
     auth_error = "Sign in with :SageChatGPTLogin to connect your ChatGPT plan"
     local result, callbacks = observe()

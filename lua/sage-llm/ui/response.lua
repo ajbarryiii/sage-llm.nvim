@@ -196,6 +196,13 @@ local function cancel_stream()
   end
 end
 
+---Cancel the displayed request, including its conversation recovery callback.
+function M.cancel_stream()
+  if state.request_handle or state.is_streaming then
+    cancel_stream()
+  end
+end
+
 ---Set up buffer keymaps
 ---@param bufnr number
 setup_keymaps = function(bufnr)

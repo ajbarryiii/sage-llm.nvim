@@ -6,6 +6,7 @@ local M = {}
 local base_url = "https://api.openai.com/v1"
 local uv = vim.uv or vim.loop
 local active_requests = {}
+local request_epoch = 0
 
 vim.api.nvim_create_autocmd("VimLeavePre", {
   group = vim.api.nvim_create_augroup("sage_llm_chatgpt_requests", { clear = true }),
@@ -39,7 +40,7 @@ end
 ---Each operation owns its callbacks and cancellation, including queued callbacks.
 ---@return table
 local function new_request()
-  local state = { cancelled = false, finished = false, handles = {} }
+  local state = { cancelled = false, finished = false, handles = {}, epoch = request_epoch }
   function state.cleanup()
     active_requests[state] = nil
     if state.body_path then
@@ -74,7 +75,7 @@ local function new_request()
     local args = { ... }
     local count = select("#", ...)
     vim.schedule(function()
-      if not state.cancelled then
+      if not state.cancelled and state.epoch == request_epoch then
         callback(unpack(args, 1, count))
       end
     end)
@@ -91,6 +92,14 @@ local function new_request()
   }
   active_requests[state] = true
   return state
+end
+
+---Stop subscription operations and suppress callbacks already queued for delivery.
+function M.cancel_all()
+  request_epoch = request_epoch + 1
+  for state in pairs(active_requests) do
+    state.handle.cancel()
+  end
 end
 
 ---@param state table

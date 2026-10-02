@@ -7,6 +7,7 @@ describe("ChatGPT subscription authentication", function()
   local requests
   local token_response
   local token_status
+  local jwks_status
   local jwks_body
   local discovery
   local deferred_refresh
@@ -131,6 +132,7 @@ describe("ChatGPT subscription authentication", function()
       expires_in = 3600,
       scope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
     }
+    jwks_status = 200
     jwks_body = { keys = {} }
     discovery = {
       issuer = "https://auth.openai.com",
@@ -175,7 +177,7 @@ describe("ChatGPT subscription authentication", function()
         end
       elseif url:match("/jwks.json$") then
         opts.callback({
-          status = 200,
+          status = jwks_status,
           body = type(jwks_body) == "string" and jwks_body or vim.json.encode(jwks_body),
         })
       elseif url:match("/openid%-configuration$") then
@@ -415,6 +417,110 @@ describe("ChatGPT subscription authentication", function()
     assert.is_nil(verification_claims[1].nonce)
     assert.is_nil(uv.fs_stat(requests[1].options.body))
     assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+  end)
+
+  it("retains rotated credentials across a transient JWKS failure and process restart", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    write_credentials(expired)
+    jwks_status = 503
+    local result
+    auth.get_access_token(function(token, err)
+      result = { token, err }
+    end)
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.is_nil(result[1])
+    local staged = saved_credentials()
+    assert.equals("old-access", staged.access_token)
+    assert.equals("new-refresh", staged.pending_refresh.tokens.refresh_token)
+    assert.equals(384, uv.fs_stat(auth_dir .. "/credentials.json").mode % 512)
+    assert.is_nil(uv.fs_stat(auth_dir .. "/session.lock"))
+
+    package.loaded["sage-llm.chatgpt_auth"] = nil
+    auth = require("sage-llm.chatgpt_auth")
+    jwks_status = 200
+    result = nil
+    auth.get_access_token(function(token, err)
+      result = { token, err }
+    end)
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.same({ "new-access" }, result)
+    local exchanges = 0
+    for _, entry in ipairs(requests) do
+      if entry.url:match("/oauth/token$") then
+        exchanges = exchanges + 1
+      end
+    end
+    assert.equals(1, exchanges)
+    assert.equals("new-refresh", saved_credentials().refresh_token)
+    assert.is_nil(saved_credentials().pending_refresh)
+  end)
+
+  it("never activates a staged refresh with an invalid identity", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    write_credentials(expired)
+    token_response.id_token = "account-b"
+    for _ = 1, 2 do
+      local result
+      auth.get_access_token(function(token, err)
+        result = { token, err }
+      end)
+      wait_for(function()
+        return result ~= nil
+      end)
+      assert.is_nil(result[1])
+      assert.matches("invalid ChatGPT identity", result[2])
+      assert.equals("old-access", saved_credentials().access_token)
+    end
+    assert.equals(3, #requests) -- One exchange, two verification attempts.
+    assert.equals("new-refresh", saved_credentials().pending_refresh.tokens.refresh_token)
+  end)
+
+  it("renews an expired staged token using its verified replacement refresh token", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    expired.pending_refresh = {
+      received_at = os.time() - 7200,
+      tokens = vim.deepcopy(token_response),
+    }
+    write_credentials(expired)
+    local result
+    auth.get_access_token(function(token, err)
+      result = { token, err }
+    end)
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.same({ "new-access" }, result)
+    assert.equals("new-refresh", requests[2].form.refresh_token)
+    assert.equals(expired.pending_refresh.received_at, verification_claims[1].time)
+    assert.is_nil(saved_credentials().pending_refresh)
+  end)
+
+  it("revokes and removes the staged replacement when signing out", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    expired.pending_refresh = {
+      received_at = os.time(),
+      tokens = vim.deepcopy(token_response),
+    }
+    write_credentials(expired)
+    local result
+    auth.logout(function(ok, err)
+      result = { ok, err }
+    end)
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.same({ true }, result)
+    assert.equals("new-refresh", requests[2].form.token)
+    assert.is_nil(saved_credentials().pending_refresh)
+    assert.is_false(auth.status().connected)
   end)
 
   it("waits for another instance and reuses its renewed credentials", function()
