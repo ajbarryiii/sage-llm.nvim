@@ -638,13 +638,21 @@ function M.stream_chat(messages, callbacks, request_opts)
       start_stream(model)
       return
     end
-    fetch_models(state, function(models, model_err)
-      if not models or not models[1] then
-        finish(model_err or "No models are available for this ChatGPT account.")
-        return
-      end
-      start_stream(models[1].slug)
-    end)
+    -- Plenary delivers HTTP callbacks in libuv's fast-event context. Credential
+    -- guards and request setup must run on Neovim's main loop.
+    fetch_models(
+      state,
+      vim.schedule_wrap(function(models, model_err)
+        if state.cancelled or state.finished then
+          return
+        end
+        if not models or not models[1] then
+          finish(model_err or "No models are available for this ChatGPT account.")
+          return
+        end
+        start_stream(models[1].slug)
+      end)
+    )
   end))
   return state.handle
 end

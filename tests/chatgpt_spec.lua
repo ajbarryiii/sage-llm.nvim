@@ -317,11 +317,71 @@ describe("ChatGPT subscription provider", function()
         },
       }),
     })
+    flush()
     assert.equals(2, #requests)
     assert.equals("account-default", vim.json.decode(requests[2].body).model)
     complete(requests[2], "Hello")
     assert.equals(1, result.completions)
   end)
+
+  it("starts automatic model inference on the main loop after a real libuv callback", function()
+    options.chatgpt.model = nil
+    local guard_contexts = {}
+    package.loaded["sage-llm.chatgpt_auth"].get_access_token = function(callback)
+      callback("synthetic-test-access-token", nil, function()
+        table.insert(guard_contexts, vim.in_fast_event())
+        return not vim.in_fast_event()
+      end)
+      return { cancel = function() end }
+    end
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+    local delivered = false
+    local timer = vim.uv.new_timer()
+    timer:start(0, 0, function()
+      timer:close()
+      assert.is_true(vim.in_fast_event())
+      requests[1].opts.callback({
+        status = 200,
+        body = vim.json.encode({
+          models = { { slug = "default-model", display_name = "Default", visibility = "list" } },
+        }),
+      })
+      delivered = true
+    end)
+    assert.is_true(vim.wait(1000, function()
+      return delivered
+    end, 5))
+    assert.equals(1, #requests)
+    flush()
+    assert.same({ false, false }, guard_contexts)
+    assert.equals(2, #requests)
+    complete(requests[2], "Hello")
+    assert.equals(1, result.completions)
+    assert.same({}, result.errors)
+  end)
+
+  it(
+    "does not start inference when cancelled after model discovery queues its continuation",
+    function()
+      options.chatgpt.model = nil
+      local result, callbacks = observe()
+      local handle = provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+      requests[1].opts.callback({
+        status = 200,
+        body = vim.json.encode({
+          models = { { slug = "default-model", display_name = "Default", visibility = "list" } },
+        }),
+      })
+      assert.equals(1, #requests)
+      handle.cancel()
+      flush()
+      assert.equals(1, #requests)
+      assert.equals(0, result.completions)
+      assert.same({}, result.errors)
+      assert.is_nil(vim.uv.fs_stat(requests[1].header_dir))
+    end
+  )
 
   it("rejects delayed inference after another instance switches accounts or logs out", function()
     options.chatgpt.model = nil
