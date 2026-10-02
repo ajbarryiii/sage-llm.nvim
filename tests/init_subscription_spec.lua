@@ -1,0 +1,399 @@
+describe("subscription conversation recovery", function()
+  local originals = {}
+  local names = {
+    "sage-llm.config",
+    "sage-llm.selection",
+    "sage-llm.prompt",
+    "sage-llm.api",
+    "sage-llm.ui",
+    "sage-llm.actions",
+    "sage-llm.models",
+    "sage-llm.infill",
+    "sage-llm.rag",
+
+    "sage-llm.conversation",
+    "sage-llm.chatgpt_auth",
+    "sage-llm.chatgpt",
+    "sage-llm.config_file",
+  }
+  local requests, current_handle, cancelled, errors, question
+  local conversation, sage
+  local original_notify, notifications
+
+  local function stub(name, module)
+    package.preload[name] = function()
+      return module
+    end
+  end
+
+  before_each(function()
+    requests, cancelled, errors, question = {}, 0, {}, "initial"
+    original_notify, notifications = vim.notify, {}
+    vim.notify = function(message)
+      notifications[#notifications + 1] = message
+    end
+    for _, name in ipairs(names) do
+      originals[name] = { preload = package.preload[name], loaded = package.loaded[name] }
+      package.loaded[name] = nil
+    end
+    package.loaded["sage-llm"] = nil
+    stub("sage-llm.config", {
+      options = { provider = "chatgpt", input = { height = 5 }, rag = { enabled = false } },
+      supports_search = function()
+        return false
+      end,
+      supports_rag = function()
+        return false
+      end,
+    })
+    stub("sage-llm.selection", {
+      get_visual_selection = function()
+        return nil
+      end,
+    })
+    stub("sage-llm.prompt", {
+      format_question_header = function(text)
+        return text
+      end,
+      format_followup_header = function(text)
+        return text
+      end,
+      build_messages_no_selection = function(text)
+        return { { role = "user", content = text } }
+      end,
+    })
+    stub("sage-llm.api", {
+      stream_chat = function(messages, callbacks, opts)
+        requests[#requests + 1] = { messages = messages, callbacks = callbacks, opts = opts }
+        return {
+          cancel = function()
+            cancelled = cancelled + 1
+          end,
+        }
+      end,
+    })
+    stub("sage-llm.ui", {
+      input = {
+        open = function(opts)
+          opts.on_submit(question)
+        end,
+      },
+      response = {
+        open = function() end,
+        show_loading = function() end,
+        start_streaming = function() end,
+        append_token = function() end,
+        append_followup_header = function() end,
+        complete = function() end,
+        set_on_followup = function() end,
+        set_on_toggle_search = function() end,
+        set_search_enabled = function() end,
+        cancel_stream = function(provider)
+          if current_handle and (not provider or current_handle.provider == provider) then
+            current_handle.cancel()
+          end
+        end,
+        set_request_handle = function(handle)
+          current_handle = handle
+        end,
+        show_error = function(err)
+          errors[#errors + 1] = err
+        end,
+        is_open = function()
+          return true
+        end,
+        is_streaming = function()
+          return false
+        end,
+        get_geometry = function()
+          return nil
+        end,
+      },
+    })
+    for _, name in ipairs({ "actions", "models", "infill", "rag" }) do
+      stub("sage-llm." .. name, {})
+    end
+    stub("sage-llm.chatgpt", { cancel_all = function() end })
+    conversation = require("sage-llm.conversation")
+    sage = require("sage-llm")
+    sage.ask()
+    requests[1].callbacks.on_token("initial answer")
+    requests[1].callbacks.on_complete()
+  end)
+
+  after_each(function()
+    vim.notify = original_notify
+    for _, name in ipairs(names) do
+      package.preload[name] = originals[name].preload
+      package.loaded[name] = originals[name].loaded
+    end
+    package.loaded["sage-llm"] = nil
+  end)
+
+  local function retry_and_check()
+    question = "retry"
+    sage.followup()
+    assert.equals(3, #requests[3].messages)
+    assert.equals("retry", requests[3].messages[3].content)
+    requests[3].callbacks.on_token("retry answer")
+    requests[3].callbacks.on_complete()
+    local messages = conversation.add_followup("next")
+    assert.equals("\nretry answer", messages[4].content)
+    assert.equals(2, conversation.turn_count())
+  end
+
+  it("discards a failed partial response before a follow-up retry", function()
+    question = "fails"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    requests[2].callbacks.on_error("Subscription quota reached")
+    assert.same({ "Subscription quota reached" }, errors)
+    retry_and_check()
+  end)
+
+  it("discards a cancelled follow-up without removing a completed answer", function()
+    question = "cancelled"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    current_handle.cancel()
+    assert.equals(1, cancelled)
+    retry_and_check()
+    current_handle.cancel()
+    assert.equals(2, conversation.turn_count())
+  end)
+
+  for _, visual in ipairs({ false, true }) do
+    it(
+      "stops pending " .. (visual and "selection" or "general") .. " RAG when its provider changes",
+      function()
+        local config = require("sage-llm.config")
+        config.options.provider = "openrouter"
+        config.options.rag.enabled = true
+        config.supports_rag = function()
+          return config.options.provider == "openrouter"
+        end
+        config.supports_search = config.supports_rag
+        if visual then
+          require("sage-llm.selection").get_visual_selection = function()
+            return { bufnr = 1 }
+          end
+        end
+        local built = 0
+        local prompt = require("sage-llm.prompt")
+        prompt.format_code_header = function()
+          return "selection"
+        end
+        prompt.build_messages = function()
+          built = built + 1
+          return {}
+        end
+        prompt.build_messages_no_selection = prompt.build_messages
+        local retrieval_callback
+        require("sage-llm.rag").retrieve_context = function(_, callback)
+          retrieval_callback = callback
+          return { cancel = function() end }
+        end
+        require("sage-llm.ui").input.open = function(opts)
+          opts.on_toggle_search()
+          opts.on_submit("pending OpenRouter question")
+        end
+        sage.ask()
+        assert.is_not_nil(retrieval_callback)
+        assert.equals(1, #requests)
+        config.options.provider = "chatgpt"
+        retrieval_callback({ { content = "Private repository context" } }, nil)
+        assert.equals(1, #requests)
+        assert.equals(0, built)
+        assert.equals(1, #errors)
+        assert.matches("Provider changed", errors[1])
+        assert.equals(1, conversation.turn_count())
+      end
+    )
+  end
+
+  it("keeps RAG context and search for a pending query whose provider stays selected", function()
+    local config = require("sage-llm.config")
+    config.options.provider = "openrouter"
+    config.options.rag.enabled = true
+    config.supports_rag = function()
+      return true
+    end
+    config.supports_search = config.supports_rag
+    local snippets = { { content = "Repository context" } }
+    require("sage-llm.prompt").build_messages_no_selection = function(text, opts)
+      assert.same(snippets, opts.rag_snippets)
+      return { { role = "user", content = text .. " with repository context" } }
+    end
+    local retrieval_callback
+    require("sage-llm.rag").retrieve_context = function(_, callback)
+      retrieval_callback = callback
+      return { cancel = function() end }
+    end
+    require("sage-llm.ui").input.open = function(opts)
+      opts.on_toggle_search()
+      opts.on_submit("pending question")
+    end
+    sage.ask()
+    assert.equals(1, #requests)
+    retrieval_callback(snippets, nil)
+    assert.equals(2, #requests)
+    assert.equals("pending question with repository context", requests[2].messages[1].content)
+    assert.is_true(requests[2].opts.search)
+    assert.equals("openrouter", requests[2].opts.provider)
+    assert.same({}, errors)
+  end)
+
+  it("keeps provider and model unchanged after unsuccessful sign-in", function()
+    local config = require("sage-llm.config")
+    config.options.provider = "openrouter"
+    config.options.chatgpt = { model = "previous-slug" }
+    stub("sage-llm.chatgpt_auth", {
+      login = function(callback)
+        callback(false, "Sign-in cancelled")
+      end,
+    })
+    sage.chatgpt_login(true)
+    assert.equals("openrouter", config.options.provider)
+    assert.equals("previous-slug", config.options.chatgpt.model)
+    assert.matches("Sign-in cancelled", notifications[1], 1, true)
+  end)
+
+  it("clears the old account's model only after another account connects", function()
+    local config = require("sage-llm.config")
+    config.options.chatgpt = { model = "old-account-slug", request_timeout_ms = 30000 }
+    local saved, picked, login_options
+    config.set_provider = function(provider)
+      config.options.provider = provider
+    end
+    require("sage-llm.models").select_chatgpt = function()
+      picked = true
+    end
+    stub("sage-llm.config_file", {
+      update = function(key, value)
+        assert.equals("chatgpt", key)
+        saved = vim.deepcopy(value)
+        return true
+      end,
+    })
+    stub("sage-llm.chatgpt_auth", {
+      login = function(callback, opts)
+        login_options = opts
+        callback(true)
+      end,
+    })
+    sage.chatgpt_login(true)
+    assert.same({ new_account = true }, login_options)
+    assert.equals("chatgpt", config.options.provider)
+    assert.is_nil(config.options.chatgpt.model)
+    assert.same({ request_timeout_ms = 30000 }, saved)
+    assert.is_true(picked)
+  end)
+
+  it("shows connection status without exposing credentials", function()
+    local config = require("sage-llm.config")
+    config.options.chatgpt = { model = "account-model" }
+    stub("sage-llm.chatgpt_auth", {
+      status = function()
+        return { connected = true, email = "test@example.com", access_token = "sensitive-token" }
+      end,
+    })
+    sage.chatgpt_status()
+    assert.matches("test@example.com", notifications[1], 1, true)
+    assert.matches("account-model", notifications[1], 1, true)
+    assert.is_nil(notifications[1]:find("sensitive-token", 1, true))
+  end)
+
+  it("cancels conversation and subscription operations before clearing credentials", function()
+    question = "follow-up"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    assert.equals("chatgpt", current_handle.provider)
+    require("sage-llm.config").options.provider = "openrouter"
+    local events = {}
+    stub("sage-llm.chatgpt", {
+      cancel_all = function()
+        assert.equals(1, cancelled)
+        events[#events + 1] = "cancel"
+      end,
+    })
+    stub("sage-llm.chatgpt_auth", {
+      logout = function(callback)
+        events[#events + 1] = "logout"
+        callback(true)
+      end,
+    })
+    sage.chatgpt_logout()
+    requests[2].callbacks.on_complete()
+    assert.same({ "cancel", "logout" }, events)
+    local messages = conversation.add_followup("retry")
+    assert.equals(3, #messages)
+    assert.equals("\ninitial answer", messages[2].content)
+    assert.equals("retry", messages[3].content)
+  end)
+
+  it("keeps a running OpenRouter request when signing out of ChatGPT", function()
+    require("sage-llm.config").options.provider = "openrouter"
+    question = "OpenRouter query"
+    sage.ask()
+    assert.equals("openrouter", current_handle.provider)
+    stub("sage-llm.chatgpt_auth", {
+      logout = function(callback)
+        callback(true)
+      end,
+    })
+    sage.chatgpt_logout()
+    assert.equals(0, cancelled)
+    requests[2].callbacks.on_token("OpenRouter answer")
+    requests[2].callbacks.on_complete()
+    assert.equals(1, conversation.turn_count())
+  end)
+
+  it("invalidates old operations only after a successful account switch", function()
+    question = "old account question"
+    sage.followup()
+    requests[2].callbacks.on_token("partial")
+    local invalidations = 0
+    stub("sage-llm.chatgpt", {
+      cancel_all = function()
+        invalidations = invalidations + 1
+      end,
+    })
+    local login_callback
+    stub("sage-llm.chatgpt_auth", {
+      login = function(callback)
+        login_callback = callback
+      end,
+    })
+    local cfg = require("sage-llm.config")
+    cfg.options.chatgpt = { model = "old-model" }
+    cfg.set_provider = function(value)
+      cfg.options.provider = value
+    end
+    stub("sage-llm.config_file", {
+      update = function()
+        return true
+      end,
+    })
+    require("sage-llm.models").select_chatgpt = function() end
+    sage.chatgpt_login(true)
+    assert.equals(0, cancelled)
+    assert.equals(0, invalidations)
+    login_callback(true)
+    assert.equals(1, cancelled)
+    assert.equals(1, invalidations)
+    requests[2].callbacks.on_complete()
+    local messages = conversation.add_followup("new account question")
+    assert.equals(3, #messages)
+    assert.equals("\ninitial answer", messages[2].content)
+  end)
+
+  it("reports unconfirmed remote revocation after local sign-out", function()
+    stub("sage-llm.chatgpt_auth", {
+      logout = function(callback)
+        callback(true, "Signed out locally; remote revocation was not confirmed")
+      end,
+    })
+    sage.chatgpt_logout()
+    assert.matches("remote revocation was not confirmed", notifications[1], 1, true)
+  end)
+end)

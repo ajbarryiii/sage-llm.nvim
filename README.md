@@ -29,12 +29,14 @@ Get concise explanations without leaving your editor.
 -  **Streaming responses** - See answers as they generate
 -  **Concise explanations** - Focuses on the "why", not just the "fix"
 -  **Multiple models** - Switch between Claude, GPT, Gemini, Mercury, and more
+-  **ChatGPT subscription** - Sign in with ChatGPT and use your plan allowance without an API key
 
 ## Requirements
 
 - Neovim >= 0.10
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
-- OpenRouter API key (bring your own)
+- Hosted models: an OpenRouter API key, or an eligible ChatGPT subscription
+- ChatGPT sign-in: macOS/Linux, Neovim with LuaJIT, `openssl` on your PATH (for secure sign-in verification), and a browser
 
 ## Installation
 
@@ -67,7 +69,46 @@ use {
 
 ## Setup
 
-### 1. Get an API Key
+### 1. Connect a Provider
+
+#### Use your ChatGPT subscription
+
+Run `:SageChatGPTLogin`, continue with ChatGPT in your browser, and approve permission to use your plan. After sign-in, choose a model from your account's catalog. Sage selects the ChatGPT provider and saves your choice. Then use `:SageAsk`, `:SageExplain`, `:SageFix`, follow-ups, and `:SageInfill` as usual.
+
+This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) flow and [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). Availability and usage are subject to your account, workspace, and plan limits; manage the app's allowance in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Sage does not fall back to paid API requests when subscription usage fails. Model refusals show the explanation as a declined request; infill does not offer refused output as replacement code.
+
+- `:SageChatGPTStatus` shows your connection and selected model.
+- `:SageModel` → **ChatGPT subscription...** refreshes your account's available models.
+- `:SageChatGPTLogout` removes saved tokens and attempts to revoke the renewable session.
+- `:SageChatGPTLogin!` connects another account or workspace. Sage keeps one active connection; an unsuccessful sign-in preserves the previous connection.
+
+If an authorization code is rejected, repeat the sign-in command shown in the error. Sage retains the issued client ID as pending registration metadata and starts a fresh OAuth attempt. An interrupted new-account registration resumes with `:SageChatGPTLogin!`; ordinary sign-in still uses the existing active account.
+
+If plan usage was declined, repeat sign-in to approve it. Sage requests consent on that explicit retry; routine sign-in with an approved grant does not force another consent screen.
+
+No Codex CLI or OpenAI API key is needed. ChatGPT sign-in currently supports macOS/Linux and requires `openssl` on your PATH. On macOS, if it is missing, install it with `brew install openssl` and add its `bin` directory to your PATH.
+
+OS-managed advisory locks serialize credential updates and release automatically on process exit. Recovery removes abandoned OAuth request files under the lock; logout also removes abandoned credential copies. ChatGPT sign-in requires a LuaJIT build of Neovim.
+
+Inference headers and prompt/history files also use private storage under the ChatGPT data directory. Each request holds an OS-owned lifetime lock. Startup, new requests, and logout remove dead editors' files while preserving other editors' active requests.
+
+Credentials are stored separately from your Lua configuration in `stdpath("data")/sage-llm/chatgpt`, using owner-only permissions and atomic writes. Access tokens refresh automatically. Browser sign-in uses PKCE and validates the returned identity; credentials are never read from other apps. Do not commit or share this directory. Subscription requests send the prompt and conversation history with `store = false`; Sage supplies no tools. Repository embeddings/RAG and the OpenRouter web-search toggle are unavailable with this provider.
+
+Optional settings in `:SageConfig` (config-file values take priority over `setup()`):
+
+```lua
+return {
+  provider = "chatgpt",
+  chatgpt = {
+    -- model = "...", -- Account catalog slug; :SageModel saves this for you
+    -- auth_dir = "/private/path/sage-chatgpt", -- Optional credential directory
+    login_timeout_ms = 180000,
+    request_timeout_ms = 30000,
+  },
+}
+```
+
+#### Use OpenRouter
 
 1. Sign up at [OpenRouter](https://openrouter.ai)
 2. Generate an API key
@@ -126,6 +167,9 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | `:SageModel` | Open model picker to switch LLMs |
 | `:SageModelRemove` | Open model picker to remove a model |
 | `:SageConfig` | Open config file for editing |
+| `:SageChatGPTLogin[!]` | Sign in with ChatGPT; `!` connects another account/workspace |
+| `:SageChatGPTLogout` | Clear saved ChatGPT tokens and revoke the session |
+| `:SageChatGPTStatus` | Show ChatGPT connection status |
 | `:SageDepsOn` | Enable dependency detection (slower, more context) |
 | `:SageDepsOff` | Disable dependency detection (default) |
 

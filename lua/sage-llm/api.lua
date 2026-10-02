@@ -2,6 +2,20 @@ local config = require("sage-llm.config")
 local curl = require("plenary.curl")
 
 local M = {}
+local openrouter_chat
+
+local function cancel_job(job)
+  if job and job.handle and job.handle.kill then
+    local ok, result = pcall(job.handle.kill, job.handle, "sigterm")
+    if ok and result == 0 then
+      -- Keep the process handle open until Plenary observes and reaps its exit.
+      return
+    end
+  end
+  if job and job.shutdown then
+    pcall(job.shutdown, job)
+  end
+end
 
 -- Debug helper that works in fast event context
 local function debug_log(msg)
@@ -63,7 +77,7 @@ local function parse_sse_line(line)
   end
 
   -- SSE format: "data: {...}" or "data:{...}"
-  local data = nil
+  local data
   if line:sub(1, 6) == "data: " then
     data = line:sub(7)
   elseif line:sub(1, 5) == "data:" then
@@ -163,6 +177,10 @@ end
 ---@param request_opts {search: boolean}|nil
 ---@return SageRequestHandle|nil handle, string|nil error
 function M.stream_chat(messages, callbacks, request_opts)
+  if config.options.provider == "chatgpt" then
+    return require("sage-llm.chatgpt").stream_chat(messages, callbacks, request_opts)
+  end
+
   local api_key = config.get_api_key()
   if not api_key then
     if callbacks.on_error then
@@ -174,14 +192,16 @@ function M.stream_chat(messages, callbacks, request_opts)
   end
 
   local url = config.options.base_url .. "/chat/completions"
+  local model = resolve_model_id(request_opts)
 
   local body = vim.json.encode({
-    model = resolve_model_id(request_opts),
+    model = model,
     messages = messages,
     stream = true,
   })
 
   local cancelled = false
+  local retry_handle
 
   local token_count = 0
   local content_length = 0 -- total characters of actual content received
@@ -255,6 +275,9 @@ function M.stream_chat(messages, callbacks, request_opts)
         return
       end
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         if callbacks.on_error then
           callbacks.on_error("Network error: " .. vim.inspect(err))
         end
@@ -266,6 +289,9 @@ function M.stream_chat(messages, callbacks, request_opts)
       end
 
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         debug_log("stream callback fired")
         if not response then
           if callbacks.on_error then
@@ -275,16 +301,21 @@ function M.stream_chat(messages, callbacks, request_opts)
         end
 
         debug_log("stream callback status=" .. tostring(response.status))
-        debug_log("stream token_count=" .. tostring(token_count) .. " content_length=" .. tostring(content_length))
-        debug_log("stream response.body length=" .. tostring(response.body and #response.body or "nil"))
+        debug_log(
+          "stream token_count="
+            .. tostring(token_count)
+            .. " content_length="
+            .. tostring(content_length)
+        )
+        debug_log(
+          "stream response.body length=" .. tostring(response.body and #response.body or "nil")
+        )
 
         -- Check for HTTP errors
         if response.status ~= 200 then
           if callbacks.on_error then
-            local err_msg = extract_error_message(
-              response,
-              "API error (HTTP " .. response.status .. ")"
-            )
+            local err_msg =
+              extract_error_message(response, "API error (HTTP " .. response.status .. ")")
             callbacks.on_error(err_msg)
           end
           return
@@ -297,9 +328,14 @@ function M.stream_chat(messages, callbacks, request_opts)
         --   2. Models that send empty-delta SSE chunks (e.g. GPT-OSS-20B sends
         --      role-only deltas with no content, then the full response in the body)
         if content_length == 0 and response.body and response.body ~= "" then
-          debug_log("stream fallback: content_length=0 (token_count=" .. token_count
-            .. "), body length=" .. #response.body
-            .. ", starts with: " .. response.body:sub(1, 100))
+          debug_log(
+            "stream fallback: content_length=0 (token_count="
+              .. token_count
+              .. "), body length="
+              .. #response.body
+              .. ", starts with: "
+              .. response.body:sub(1, 100)
+          )
           -- Strategy 1: try parsing body as a single JSON response
           -- (server returned non-streaming response despite stream=true)
           local ok, data = pcall(vim.json.decode, response.body)
@@ -349,7 +385,7 @@ function M.stream_chat(messages, callbacks, request_opts)
               -- with stream=false often succeeds via a different code path
               -- on the provider side.
               debug_log("stream fallback: no content found in body, retrying without streaming")
-              M.chat(messages, function(content, err)
+              retry_handle = openrouter_chat(messages, function(content, err)
                 if cancelled then
                   return
                 end
@@ -363,7 +399,10 @@ function M.stream_chat(messages, callbacks, request_opts)
                   debug_log("stream fallback: non-streaming retry failed: " .. tostring(err))
                   callbacks.on_error(err or "No content received from model")
                 end
-              end, request_opts)
+              end, { api_key = api_key, url = url, model = model })
+              if cancelled and retry_handle then
+                retry_handle.cancel()
+              end
               return -- Don't call on_complete here; the retry callback handles it
             end
           end
@@ -380,37 +419,35 @@ function M.stream_chat(messages, callbacks, request_opts)
   return {
     cancel = function()
       cancelled = true
-      if job and job.shutdown then
-        job:shutdown()
+      if retry_handle then
+        retry_handle.cancel()
       end
+      cancel_job(job)
     end,
   },
     nil
 end
 
----Make a non-streaming chat completion request (for simpler use cases)
 ---@param messages table[] Array of {role, content} messages
 ---@param callback function Called with (response_text, error)
----@param request_opts {search: boolean}|nil
+---@param request {api_key: string|nil, url: string, model: string}
 ---@return SageRequestHandle|nil
-function M.chat(messages, callback, request_opts)
-  local api_key = config.get_api_key()
+openrouter_chat = function(messages, callback, request)
+  local api_key = request.api_key
   if not api_key then
     callback(nil, "No API key found. Set $OPENROUTER_API_KEY or configure api_key in setup()")
     return nil
   end
 
-  local url = config.options.base_url .. "/chat/completions"
-
   local body = vim.json.encode({
-    model = resolve_model_id(request_opts),
+    model = request.model,
     messages = messages,
     stream = false,
   })
 
   local cancelled = false
 
-  local job = curl.post(url, {
+  local job = curl.post(request.url, {
     headers = build_headers(api_key),
     body = body,
     on_error = function(err)
@@ -418,12 +455,15 @@ function M.chat(messages, callback, request_opts)
         return
       end
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         callback(nil, "Network error: " .. vim.inspect(err))
       end)
     end,
     callback = function(response)
       debug_log("callback fired, cancelled=" .. tostring(cancelled))
-      
+
       if cancelled then
         return
       end
@@ -432,10 +472,16 @@ function M.chat(messages, callback, request_opts)
       if response then
         debug_log("response.status=" .. tostring(response.status))
         debug_log("response.body length=" .. tostring(response.body and #response.body or "nil"))
-        debug_log("response.body first 500 chars=" .. tostring(response.body and response.body:sub(1, 500) or "nil"))
+        debug_log(
+          "response.body first 500 chars="
+            .. tostring(response.body and response.body:sub(1, 500) or "nil")
+        )
       end
 
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         debug_log("inside vim.schedule")
 
         if not response then
@@ -445,10 +491,8 @@ function M.chat(messages, callback, request_opts)
         end
 
         if response.status ~= 200 then
-          local err_msg = extract_error_message(
-            response,
-            "API error (HTTP " .. tostring(response.status) .. ")"
-          )
+          local err_msg =
+            extract_error_message(response, "API error (HTTP " .. tostring(response.status) .. ")")
           debug_log("error: " .. err_msg)
           callback(nil, err_msg)
           return
@@ -478,11 +522,26 @@ function M.chat(messages, callback, request_opts)
   return {
     cancel = function()
       cancelled = true
-      if job and job.shutdown then
-        job:shutdown()
-      end
+      cancel_job(job)
     end,
   }
+end
+
+---Make a non-streaming chat completion request (for simpler use cases)
+---@param messages table[] Array of {role, content} messages
+---@param callback function Called with (response_text, error)
+---@param request_opts {search: boolean}|nil
+---@return SageRequestHandle|nil
+function M.chat(messages, callback, request_opts)
+  if config.options.provider == "chatgpt" then
+    return require("sage-llm.chatgpt").chat(messages, callback, request_opts)
+  end
+
+  return openrouter_chat(messages, callback, {
+    api_key = config.get_api_key(),
+    url = config.options.base_url .. "/chat/completions",
+    model = resolve_model_id(request_opts),
+  })
 end
 
 ---Create embeddings for one or more inputs
@@ -491,6 +550,11 @@ end
 ---@param callback function Called with (vectors, error)
 ---@return SageRequestHandle|nil
 function M.embeddings(input, model, callback)
+  if config.options.provider == "chatgpt" then
+    callback(nil, "ChatGPT subscription embeddings/RAG are not supported")
+    return nil
+  end
+
   model = model or (config.options.rag and config.options.rag.embedding_model)
 
   if not model or model == "" then

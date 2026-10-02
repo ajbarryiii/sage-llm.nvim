@@ -20,14 +20,36 @@ local M = {}
 
 ---@class SageRequestOptions
 ---@field search boolean Enable web search by appending :online to model id
+---@field provider string|nil Provider selected when the question was submitted
 
 ---@type SageRequestOptions
 local request_opts = {
   search = false,
 }
 
+local warned_unsupported_rag = false
+
+local function supports_search()
+  if config.supports_search then
+    return config.supports_search()
+  end
+  return true
+end
+
+local function supports_rag()
+  if config.supports_rag then
+    return config.supports_rag()
+  end
+  return true
+end
+
 ---@return boolean
 local function toggle_search()
+  if not supports_search() then
+    vim.notify("sage-llm: Web search requires the OpenRouter provider", vim.log.levels.WARN)
+    return false
+  end
+
   request_opts.search = not request_opts.search
   local status = request_opts.search and "enabled" or "disabled"
   vim.notify("sage-llm: Web search " .. status, vim.log.levels.INFO)
@@ -38,7 +60,8 @@ end
 ---@return SageRequestOptions
 local function consume_request_opts()
   local opts = {
-    search = request_opts.search,
+    search = supports_search() and request_opts.search or false,
+    provider = config.options.provider or "openrouter",
   }
 
   request_opts.search = false
@@ -47,15 +70,31 @@ local function consume_request_opts()
   return opts
 end
 
+---Stop a pending query before assembling or sending context to a changed provider.
+---@param request SageRequestOptions
+---@return boolean
+local function check_query_provider(request)
+  if request.provider == (config.options.provider or "openrouter") then
+    return true
+  end
+  ui.response.show_error("Provider changed while loading context. Submit the question again.")
+  return false
+end
+
 ---Stream a response into the response window and conversation state
 ---@param messages table[]
 ---@param on_error fun(err: string)|nil
 ---@param opts SageRequestOptions|nil
 local function stream_response(messages, on_error, opts)
+  local provider = config.options.provider or "openrouter"
   local started = false
+  local settled = false
   local handle = api.stream_chat(messages, {
     on_start = function() end,
     on_token = function(token)
+      if settled then
+        return
+      end
       if not started then
         ui.response.start_streaming()
         started = true
@@ -64,6 +103,10 @@ local function stream_response(messages, on_error, opts)
       conversation.accumulate_token(token)
     end,
     on_complete = function()
+      if settled then
+        return
+      end
+      settled = true
       if not started then
         ui.response.start_streaming()
       end
@@ -71,6 +114,11 @@ local function stream_response(messages, on_error, opts)
       ui.response.complete()
     end,
     on_error = function(err)
+      if settled then
+        return
+      end
+      settled = true
+      conversation.discard_response()
       if on_error then
         on_error(err)
         return
@@ -80,7 +128,19 @@ local function stream_response(messages, on_error, opts)
   }, opts)
 
   if handle then
-    ui.response.set_request_handle(handle)
+    ui.response.set_request_handle({
+      provider = provider,
+      cancel = function()
+        handle.cancel()
+        if not settled then
+          settled = true
+          conversation.discard_response()
+          if on_error then
+            conversation.remove_last_user_message()
+          end
+        end
+      end,
+    })
   end
 end
 
@@ -119,9 +179,9 @@ local function setup_followup_callback()
     M.followup()
   end)
 
-  ui.response.set_on_toggle_search(function()
+  ui.response.set_on_toggle_search(supports_search() and function()
     return toggle_search()
-  end)
+  end or nil)
 
   ui.response.set_search_enabled(request_opts.search)
 end
@@ -132,6 +192,16 @@ end
 ---@param opts {use_rag: boolean}|nil
 local function execute_query(sel, question, opts)
   opts = opts or { use_rag = false }
+  if opts.use_rag and not supports_rag() then
+    opts.use_rag = false
+    if not warned_unsupported_rag then
+      warned_unsupported_rag = true
+      vim.notify(
+        "sage-llm: RAG requires OpenRouter; continuing without repository context",
+        vim.log.levels.WARN
+      )
+    end
+  end
   local request = consume_request_opts()
 
   -- Build the code header for display
@@ -142,6 +212,9 @@ local function execute_query(sel, question, opts)
   ui.response.show_loading()
 
   local function submit_chat(rag_snippets)
+    if not check_query_provider(request) then
+      return
+    end
     local messages = prompt.build_messages(sel, question, {
       rag_snippets = rag_snippets,
     })
@@ -190,6 +263,16 @@ end
 ---@param opts {use_rag: boolean}|nil
 local function execute_simple_query(question, opts)
   opts = opts or { use_rag = false }
+  if opts.use_rag and not supports_rag() then
+    opts.use_rag = false
+    if not warned_unsupported_rag then
+      warned_unsupported_rag = true
+      vim.notify(
+        "sage-llm: RAG requires OpenRouter; continuing without repository context",
+        vim.log.levels.WARN
+      )
+    end
+  end
   local request = consume_request_opts()
 
   -- Build the question header for display
@@ -200,6 +283,9 @@ local function execute_simple_query(question, opts)
   ui.response.show_loading()
 
   local function submit_chat(rag_snippets)
+    if not check_query_provider(request) then
+      return
+    end
     local messages = prompt.build_messages_no_selection(question, {
       rag_snippets = rag_snippets,
     })
@@ -255,6 +341,7 @@ local function execute_infill(sel, instruction)
   ui.response.set_on_followup(nil)
 
   local messages = prompt.build_infill_messages(sel, instruction)
+  local provider = config.options.provider or "openrouter"
   local handle = api.chat(messages, function(content, err)
     if err then
       ui.response.show_error(err)
@@ -289,7 +376,7 @@ local function execute_infill(sel, instruction)
   end, opts)
 
   if handle then
-    ui.response.set_request_handle(handle)
+    ui.response.set_request_handle({ provider = provider, cancel = handle.cancel })
   end
 end
 
@@ -297,7 +384,7 @@ end
 ---In visual mode: asks about the selection
 ---In normal mode: asks a general question
 function M.ask()
-  local use_rag = config.options.rag and config.options.rag.enabled or false
+  local use_rag = supports_rag() and config.options.rag and config.options.rag.enabled or false
 
   local function on_toggle_rag(enabled)
     use_rag = enabled
@@ -311,12 +398,12 @@ function M.ask()
     -- Visual mode: ask about selection
     ui.input.open({
       prompt = "Ask about this code:",
-      search_enabled = request_opts.search,
-      on_toggle_search = function()
+      search_enabled = supports_search() and request_opts.search or false,
+      on_toggle_search = supports_search() and function()
         return toggle_search()
-      end,
-      rag_enabled = use_rag,
-      on_toggle_rag = on_toggle_rag,
+      end or nil,
+      rag_enabled = supports_rag() and use_rag or false,
+      on_toggle_rag = supports_rag() and on_toggle_rag or nil,
       on_submit = function(question)
         execute_query(sel, question, { use_rag = use_rag })
       end,
@@ -328,12 +415,12 @@ function M.ask()
     -- Normal mode: ask without selection
     ui.input.open({
       prompt = "Ask a question:",
-      search_enabled = request_opts.search,
-      on_toggle_search = function()
+      search_enabled = supports_search() and request_opts.search or false,
+      on_toggle_search = supports_search() and function()
         return toggle_search()
-      end,
-      rag_enabled = use_rag,
-      on_toggle_rag = on_toggle_rag,
+      end or nil,
+      rag_enabled = supports_rag() and use_rag or false,
+      on_toggle_rag = supports_rag() and on_toggle_rag or nil,
       on_submit = function(question)
         execute_simple_query(question, { use_rag = use_rag })
       end,
@@ -384,10 +471,10 @@ function M.infill()
 
   ui.input.open({
     prompt = config.options.input.infill_prompt or "Describe the edit:",
-    search_enabled = request_opts.search,
-    on_toggle_search = function()
+    search_enabled = supports_search() and request_opts.search or false,
+    on_toggle_search = supports_search() and function()
       return toggle_search()
-    end,
+    end or nil,
     on_submit = function(instruction)
       execute_infill(sel, instruction)
     end,
@@ -437,10 +524,10 @@ function M.followup()
   ui.input.open({
     prompt = config.options.input.followup_prompt or "Follow-up question:",
     position = position,
-    search_enabled = request_opts.search,
-    on_toggle_search = function()
+    search_enabled = supports_search() and request_opts.search or false,
+    on_toggle_search = supports_search() and function()
       return toggle_search()
-    end,
+    end or nil,
     on_submit = function(question)
       execute_followup(question)
     end,
@@ -477,6 +564,61 @@ function M.remove_model()
   models.remove()
 end
 
+---Sign in with ChatGPT and select a subscription model.
+---@param new_account boolean|nil Register another account or workspace.
+function M.chatgpt_login(new_account)
+  vim.validate({ new_account = { new_account, "boolean", true } })
+  return require("sage-llm.chatgpt_auth").login(function(ok, err)
+    if not ok then
+      vim.notify("sage-llm: " .. (err or "ChatGPT sign-in failed"), vim.log.levels.ERROR)
+      return
+    end
+    ui.response.cancel_stream("chatgpt")
+    require("sage-llm.chatgpt").cancel_all()
+    if new_account then
+      config.options.chatgpt.model = nil
+      local saved, save_err =
+        require("sage-llm.config_file").update("chatgpt", config.options.chatgpt)
+      if not saved and save_err then
+        vim.notify("sage-llm: Failed to save ChatGPT settings: " .. save_err, vim.log.levels.WARN)
+      end
+    end
+    config.set_provider("chatgpt")
+    vim.notify("sage-llm: Connected to ChatGPT", vim.log.levels.INFO)
+    models.select_chatgpt()
+  end, { new_account = new_account == true })
+end
+
+---Remove Sage's saved ChatGPT credentials.
+function M.chatgpt_logout()
+  ui.response.cancel_stream("chatgpt")
+  require("sage-llm.chatgpt").cancel_all()
+  require("sage-llm.chatgpt_auth").logout(function(ok, err)
+    vim.notify(
+      "sage-llm: " .. (err or (ok and "Signed out of ChatGPT" or "ChatGPT sign-out failed")),
+      ok and (err and vim.log.levels.WARN or vim.log.levels.INFO) or vim.log.levels.ERROR
+    )
+  end)
+end
+
+---Show ChatGPT connection status without exposing credentials.
+function M.chatgpt_status()
+  local status = require("sage-llm.chatgpt_auth").status()
+  if not status.connected then
+    vim.notify("sage-llm: ChatGPT is not connected. Run :SageChatGPTLogin", vim.log.levels.INFO)
+    return
+  end
+  vim.notify(
+    "sage-llm: ChatGPT connected"
+      .. (status.email and (" as " .. status.email) or "")
+      .. "\nProvider: "
+      .. config.options.provider
+      .. "\nModel: "
+      .. ((config.options.chatgpt or {}).model or "automatic"),
+    vim.log.levels.INFO
+  )
+end
+
 ---Enable dependency detection
 function M.deps_on()
   config.set_detect_dependencies(true)
@@ -493,6 +635,10 @@ end
 ---@param opts SageConfig|nil User configuration
 function M.setup(opts)
   config.setup(opts)
+  local cleaned, err = require("sage-llm.chatgpt_transport").cleanup_orphans()
+  if not cleaned then
+    vim.notify("sage-llm: " .. err, vim.log.levels.WARN)
+  end
 end
 
 ---Get the path to the config file

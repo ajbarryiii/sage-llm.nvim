@@ -57,7 +57,15 @@ function M.apply_selection(selection, replacement)
   local ok, err
 
   if selection.mode == "v" then
-    ok, err = pcall(vim.api.nvim_buf_set_text, bufnr, selection.start_line - 1, selection.start_col, selection.end_line - 1, selection.end_col, replacement_lines)
+    ok, err = pcall(
+      vim.api.nvim_buf_set_text,
+      bufnr,
+      selection.start_line - 1,
+      selection.start_col,
+      selection.end_line - 1,
+      selection.end_col,
+      replacement_lines
+    )
   else
     ok, err = pcall(
       vim.api.nvim_buf_set_lines,

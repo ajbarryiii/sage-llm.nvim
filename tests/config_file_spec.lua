@@ -125,6 +125,24 @@ describe("config_file", function()
       assert.equals("test-model", loaded.model)
     end)
 
+    it("creates an optional-key template with subscription setup guidance", function()
+      assert.is_true(config_file.create_template())
+      local loaded = config_file.load()
+      assert.is_nil(loaded.api_key)
+      local content = table.concat(vim.fn.readfile(config_file.get_config_path()), "\n")
+      assert.truthy(content:find("OPENROUTER_API_KEY", 1, true))
+      assert.truthy(content:find(":SageChatGPTLogin", 1, true))
+      assert.truthy(content:find('provider = "chatgpt"', 1, true))
+    end)
+
+    it("updates subscription settings without overwriting the OpenRouter model", function()
+      config_file.save({ model = "openrouter-model" })
+      assert.is_true(config_file.update("chatgpt", { model = "subscription-model" }))
+      local loaded = config_file.load()
+      assert.equals("openrouter-model", loaded.model)
+      assert.equals("subscription-model", loaded.chatgpt.model)
+    end)
+
     it("update modifies a single key", function()
       -- First create a config
       config_file.save({

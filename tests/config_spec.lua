@@ -29,6 +29,17 @@ describe("config", function()
       assert.equals("https://openrouter.ai/api/v1", config.defaults.base_url)
     end)
 
+    it("defaults to OpenRouter provider", function()
+      assert.equals("openrouter", config.defaults.provider)
+    end)
+
+    it("has ChatGPT subscription defaults", function()
+      assert.is_nil(config.defaults.chatgpt.model)
+      assert.is_nil(config.defaults.chatgpt.auth_dir)
+      assert.equals(180000, config.defaults.chatgpt.login_timeout_ms)
+      assert.equals(30000, config.defaults.chatgpt.request_timeout_ms)
+    end)
+
     it("has detect_dependencies disabled by default", function()
       assert.is_false(config.defaults.detect_dependencies)
     end)
@@ -88,6 +99,52 @@ describe("config", function()
         })
       end)
     end)
+
+    it("rejects invalid provider", function()
+      assert.has_error(function()
+        config.setup({ provider = "bogus" })
+      end)
+    end)
+
+    it("uses the selected ChatGPT model without replacing the OpenRouter choice", function()
+      config.setup({
+        provider = "chatgpt",
+        model = "openai/gpt-oss-20b",
+        chatgpt = { model = "subscription-model" },
+      })
+
+      assert.equals("subscription-model", config.options.model)
+      config.set_provider("openrouter", false)
+      assert.equals("openai/gpt-oss-20b", config.options.model)
+    end)
+
+    it("shows a friendly placeholder before discovering a subscription model", function()
+      config.setup({ provider = "chatgpt" })
+      assert.equals("ChatGPT", config.options.model)
+    end)
+
+    it("validates subscription configuration types", function()
+      for _, opts in ipairs({
+        { chatgpt = "invalid" },
+        { chatgpt = { model = 1 } },
+        { chatgpt = { auth_dir = false } },
+        { chatgpt = { request_timeout_ms = "30000" } },
+      }) do
+        assert.has_error(function()
+          config.setup(opts)
+        end)
+      end
+    end)
+
+    it("requires positive finite integer subscription timeouts", function()
+      for _, key in ipairs({ "login_timeout_ms", "request_timeout_ms" }) do
+        for _, value in ipairs({ 0, -1, 0.5, math.huge, -math.huge, 0 / 0 }) do
+          assert.has_error(function()
+            config.setup({ chatgpt = { [key] = value } })
+          end)
+        end
+      end
+    end)
   end)
 
   describe("get_api_key", function()
@@ -140,6 +197,56 @@ describe("config", function()
       config.set_model("google/gemini-2.0-flash")
       assert.equals("google/gemini-2.0-flash", config.options.model)
     end)
+
+    it("persists subscription model settings separately from the global model", function()
+      config.setup({ provider = "chatgpt", chatgpt = { auth_dir = "/private/auth" } })
+      local saved_key, saved_value
+      require("sage-llm.config_file").update = function(key, value)
+        saved_key, saved_value = key, vim.deepcopy(value)
+        return true
+      end
+
+      config.set_model("subscription-model")
+
+      assert.equals("chatgpt", saved_key)
+      assert.equals("subscription-model", saved_value.model)
+      assert.equals("/private/auth", saved_value.auth_dir)
+      assert.equals("subscription-model", config.options.model)
+      assert.equals("subscription-model", config.options.chatgpt.model)
+    end)
+
+    it("restores each provider's model when switching", function()
+      config.setup({ model = "openrouter-model" })
+      config.set_provider("chatgpt", false)
+      config.set_model("subscription-model", false)
+      config.set_provider("openrouter", false)
+      assert.equals("openrouter-model", config.options.model)
+      config.set_provider("chatgpt", false)
+      assert.equals("subscription-model", config.options.model)
+    end)
+  end)
+
+  describe("provider helpers", function()
+    it("sets provider", function()
+      config.setup({})
+      config.set_provider("chatgpt", false)
+
+      assert.equals("chatgpt", config.options.provider)
+      assert.is_true(config.is_chatgpt_provider())
+      assert.is_false(config.supports_search())
+      assert.is_false(config.supports_rag())
+    end)
+
+    it("disables search and RAG for ChatGPT subscriptions", function()
+      config.setup({ provider = "chatgpt" })
+      assert.is_true(config.is_chatgpt_provider())
+      assert.is_false(config.supports_search())
+      assert.is_false(config.supports_rag())
+      config.set_provider("openrouter", false)
+      assert.is_false(config.is_chatgpt_provider())
+      assert.is_true(config.supports_search())
+      assert.is_true(config.supports_rag())
+    end)
   end)
 
   describe("add_model", function()
@@ -184,6 +291,26 @@ describe("config", function()
       assert.is_false(removed)
       assert.same({ "a" }, config.options.models)
       assert.equals("a", config.options.model)
+    end)
+
+    it("preserves subscription selection when removing an OpenRouter model", function()
+      config.setup({
+        provider = "chatgpt",
+        models = { "a", "b" },
+        model = "a",
+        chatgpt = { model = "subscription-model" },
+      })
+      local updates = {}
+      require("sage-llm.config_file").update = function(key, value)
+        updates[key] = value
+        return true
+      end
+
+      assert.is_true(config.remove_model("a"))
+      assert.equals("subscription-model", config.options.model)
+      assert.equals("b", updates.model)
+      config.set_provider("openrouter", false)
+      assert.equals("b", config.options.model)
     end)
   end)
 

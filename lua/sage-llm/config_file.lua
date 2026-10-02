@@ -7,14 +7,17 @@ local M = {}
 local TEMPLATE = [[
 -- sage-llm.nvim configuration
 -- This file is loaded automatically by sage-llm.nvim
--- Keep your API key here instead of in your Neovim config
+-- For OpenRouter, set OPENROUTER_API_KEY in your shell environment.
+-- ChatGPT subscription login is available through :SageChatGPTLogin.
+-- Subscription credentials are stored privately outside this configuration.
 
 return {
-  -- Your OpenRouter API key (required)
+  -- Optional OpenRouter API key (prefer OPENROUTER_API_KEY):
   -- Get one at: https://openrouter.ai/keys
-  api_key = "your-api-key-here",
+  -- api_key = "your-api-key-here",
 
   -- Uncomment to override defaults:
+  -- provider = "openrouter", -- "openrouter" or "chatgpt"
   -- model = "google/gemini-3.8-flash",
   -- detect_dependencies = false,
   -- rag = {
@@ -33,6 +36,15 @@ return {
   --   height = 5,
   --   border = "rounded",
   -- },
+  --
+  -- ChatGPT subscription example (sign in with :SageChatGPTLogin):
+  -- provider = "chatgpt",
+  -- chatgpt = {
+  --   -- Select an available model using :SageModel after signing in.
+  --   login_timeout_ms = 180000,
+  --   request_timeout_ms = 30000,
+  -- },
+  --
 }
 ]]
 

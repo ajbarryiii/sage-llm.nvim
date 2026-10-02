@@ -87,6 +87,25 @@ local function create_commands()
   end, {
     desc = "Edit sage-llm config file",
   })
+
+  vim.api.nvim_create_user_command("SageChatGPTLogin", function(opts)
+    require("sage-llm").chatgpt_login(opts.bang)
+  end, {
+    bang = true,
+    desc = "Continue with ChatGPT to use your subscription",
+  })
+
+  vim.api.nvim_create_user_command("SageChatGPTLogout", function()
+    require("sage-llm").chatgpt_logout()
+  end, {
+    desc = "Remove Sage's saved ChatGPT credentials",
+  })
+
+  vim.api.nvim_create_user_command("SageChatGPTStatus", function()
+    require("sage-llm").chatgpt_status()
+  end, {
+    desc = "Show ChatGPT subscription connection status",
+  })
 end
 
 create_commands()
