@@ -48,6 +48,11 @@ function M.finish_response()
   return response
 end
 
+---Discard an interrupted or failed answer before the next turn.
+function M.discard_response()
+  state.current_response = "\n"
+end
+
 ---Add a follow-up user message to the conversation.
 ---Returns the full messages array (including the new message) for the API call.
 ---@param question string The follow-up question

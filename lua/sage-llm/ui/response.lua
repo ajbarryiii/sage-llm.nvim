@@ -45,11 +45,15 @@ end
 
 ---@return string
 local function footer_text()
-  local search_state = state.search_enabled and "on" or "off"
-  if state.edit_pending then
-    return " A accept+close | a apply | r reject | q hide | y yank | S search:" .. search_state .. " "
+  local search_text = ""
+  if state.on_toggle_search then
+    local search_state = state.search_enabled and "on" or "off"
+    search_text = " | S search:" .. search_state
   end
-  return " q hide | y yank | f follow-up | S search:" .. search_state .. " "
+  if state.edit_pending then
+    return " A accept+close | a apply | r reject | q hide | y yank" .. search_text .. " "
+  end
+  return " q hide | y yank | f follow-up" .. search_text .. " "
 end
 
 local function refresh_footer()
@@ -246,20 +250,19 @@ setup_keymaps = function(bufnr)
   end, opts)
 
   -- Toggle web search for next query
-  vim.keymap.set("n", "S", function()
-    local enabled = nil
-    if state.on_toggle_search then
-      enabled = state.on_toggle_search()
-    end
+  if state.on_toggle_search then
+    vim.keymap.set("n", "S", function()
+      local enabled = state.on_toggle_search()
 
-    if type(enabled) == "boolean" then
-      state.search_enabled = enabled
-    else
-      state.search_enabled = not state.search_enabled
-    end
+      if type(enabled) == "boolean" then
+        state.search_enabled = enabled
+      else
+        state.search_enabled = not state.search_enabled
+      end
 
-    refresh_footer()
-  end, opts)
+      refresh_footer()
+    end, opts)
+  end
 
   -- Cancel streaming
   vim.keymap.set("n", "<C-c>", function()
@@ -388,7 +391,12 @@ function M.start_streaming()
   end
 
   local trimmed_count = vim.api.nvim_buf_line_count(state.bufnr)
-  local before_last = vim.api.nvim_buf_get_lines(state.bufnr, trimmed_count - 1, trimmed_count, false)[1] or ""
+  local before_last = vim.api.nvim_buf_get_lines(
+    state.bufnr,
+    trimmed_count - 1,
+    trimmed_count,
+    false
+  )[1] or ""
   if not is_blank_line(before_last) then
     vim.api.nvim_buf_set_lines(state.bufnr, trimmed_count, trimmed_count, false, { "" })
   end
@@ -402,7 +410,8 @@ function M.append_token(token)
   end
 
   local line_count = vim.api.nvim_buf_line_count(state.bufnr)
-  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1] or ""
+  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1]
+    or ""
 
   if state.awaiting_response_text then
     if is_blank_line(last_line) then
@@ -456,7 +465,8 @@ function M.complete()
   end
 
   local line_count = vim.api.nvim_buf_line_count(state.bufnr)
-  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1] or ""
+  local last_line = vim.api.nvim_buf_get_lines(state.bufnr, line_count - 1, line_count, false)[1]
+    or ""
   if not is_blank_line(last_line) then
     vim.api.nvim_buf_set_lines(state.bufnr, line_count, line_count, false, { "" })
   end
@@ -510,6 +520,11 @@ end
 ---@param callback fun(): boolean|nil
 function M.set_on_toggle_search(callback)
   state.on_toggle_search = callback
+  if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+    pcall(vim.api.nvim_buf_del_keymap, state.bufnr, "n", "S")
+    setup_keymaps(state.bufnr)
+  end
+  refresh_footer()
 end
 
 ---Set whether web search is enabled for the next query

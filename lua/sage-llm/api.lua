@@ -63,7 +63,7 @@ local function parse_sse_line(line)
   end
 
   -- SSE format: "data: {...}" or "data:{...}"
-  local data = nil
+  local data
   if line:sub(1, 6) == "data: " then
     data = line:sub(7)
   elseif line:sub(1, 5) == "data:" then
@@ -163,6 +163,10 @@ end
 ---@param request_opts {search: boolean}|nil
 ---@return SageRequestHandle|nil handle, string|nil error
 function M.stream_chat(messages, callbacks, request_opts)
+  if config.options.provider == "chatgpt" then
+    return require("sage-llm.chatgpt").stream_chat(messages, callbacks, request_opts)
+  end
+
   local api_key = config.get_api_key()
   if not api_key then
     if callbacks.on_error then
@@ -275,16 +279,21 @@ function M.stream_chat(messages, callbacks, request_opts)
         end
 
         debug_log("stream callback status=" .. tostring(response.status))
-        debug_log("stream token_count=" .. tostring(token_count) .. " content_length=" .. tostring(content_length))
-        debug_log("stream response.body length=" .. tostring(response.body and #response.body or "nil"))
+        debug_log(
+          "stream token_count="
+            .. tostring(token_count)
+            .. " content_length="
+            .. tostring(content_length)
+        )
+        debug_log(
+          "stream response.body length=" .. tostring(response.body and #response.body or "nil")
+        )
 
         -- Check for HTTP errors
         if response.status ~= 200 then
           if callbacks.on_error then
-            local err_msg = extract_error_message(
-              response,
-              "API error (HTTP " .. response.status .. ")"
-            )
+            local err_msg =
+              extract_error_message(response, "API error (HTTP " .. response.status .. ")")
             callbacks.on_error(err_msg)
           end
           return
@@ -297,9 +306,14 @@ function M.stream_chat(messages, callbacks, request_opts)
         --   2. Models that send empty-delta SSE chunks (e.g. GPT-OSS-20B sends
         --      role-only deltas with no content, then the full response in the body)
         if content_length == 0 and response.body and response.body ~= "" then
-          debug_log("stream fallback: content_length=0 (token_count=" .. token_count
-            .. "), body length=" .. #response.body
-            .. ", starts with: " .. response.body:sub(1, 100))
+          debug_log(
+            "stream fallback: content_length=0 (token_count="
+              .. token_count
+              .. "), body length="
+              .. #response.body
+              .. ", starts with: "
+              .. response.body:sub(1, 100)
+          )
           -- Strategy 1: try parsing body as a single JSON response
           -- (server returned non-streaming response despite stream=true)
           local ok, data = pcall(vim.json.decode, response.body)
@@ -394,6 +408,10 @@ end
 ---@param request_opts {search: boolean}|nil
 ---@return SageRequestHandle|nil
 function M.chat(messages, callback, request_opts)
+  if config.options.provider == "chatgpt" then
+    return require("sage-llm.chatgpt").chat(messages, callback, request_opts)
+  end
+
   local api_key = config.get_api_key()
   if not api_key then
     callback(nil, "No API key found. Set $OPENROUTER_API_KEY or configure api_key in setup()")
@@ -423,7 +441,7 @@ function M.chat(messages, callback, request_opts)
     end,
     callback = function(response)
       debug_log("callback fired, cancelled=" .. tostring(cancelled))
-      
+
       if cancelled then
         return
       end
@@ -432,7 +450,10 @@ function M.chat(messages, callback, request_opts)
       if response then
         debug_log("response.status=" .. tostring(response.status))
         debug_log("response.body length=" .. tostring(response.body and #response.body or "nil"))
-        debug_log("response.body first 500 chars=" .. tostring(response.body and response.body:sub(1, 500) or "nil"))
+        debug_log(
+          "response.body first 500 chars="
+            .. tostring(response.body and response.body:sub(1, 500) or "nil")
+        )
       end
 
       vim.schedule(function()
@@ -445,10 +466,8 @@ function M.chat(messages, callback, request_opts)
         end
 
         if response.status ~= 200 then
-          local err_msg = extract_error_message(
-            response,
-            "API error (HTTP " .. tostring(response.status) .. ")"
-          )
+          local err_msg =
+            extract_error_message(response, "API error (HTTP " .. tostring(response.status) .. ")")
           debug_log("error: " .. err_msg)
           callback(nil, err_msg)
           return
@@ -491,6 +510,11 @@ end
 ---@param callback function Called with (vectors, error)
 ---@return SageRequestHandle|nil
 function M.embeddings(input, model, callback)
+  if config.options.provider == "chatgpt" then
+    callback(nil, "ChatGPT subscription embeddings/RAG are not supported")
+    return nil
+  end
+
   model = model or (config.options.rag and config.options.rag.embedding_model)
 
   if not model or model == "" then

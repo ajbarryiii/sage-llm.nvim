@@ -1,7 +1,9 @@
 ---@class SageConfig
+---@field provider string LLM provider: "openrouter" or "chatgpt"
 ---@field api_key string|nil API key for OpenRouter (falls back to $OPENROUTER_API_KEY)
 ---@field model string Default model to use
 ---@field base_url string OpenRouter API base URL
+---@field chatgpt SageChatGPTConfig ChatGPT subscription configuration
 ---@field response SageResponseConfig Response window configuration
 ---@field input SageInputConfig Input window configuration
 ---@field detect_dependencies boolean Whether to detect and include dependencies
@@ -38,15 +40,29 @@
 ---@field exclude string[] Glob patterns for files to exclude from index
 ---@field index_dir string|nil Optional custom directory for persisted index cache
 
+---@class SageChatGPTConfig
+---@field model string|nil Model slug from the authenticated ChatGPT catalog
+---@field auth_dir string|nil Custom directory for private subscription credentials
+---@field login_timeout_ms number Timeout waiting for browser login
+---@field request_timeout_ms number Timeout for subscription HTTP requests
+
 local config_file = require("sage-llm.config_file")
 
 local M = {}
 
 ---@type SageConfig
 M.defaults = {
+  provider = "openrouter",
   api_key = nil,
   model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
+
+  chatgpt = {
+    model = nil,
+    auth_dir = nil,
+    login_timeout_ms = 180000,
+    request_timeout_ms = 30000,
+  },
 
   response = {
     width = 0.6,
@@ -170,6 +186,14 @@ Rules:
 ---@type SageConfig
 M.options = vim.deepcopy(M.defaults)
 
+-- The subscription model is stored separately; remember other provider choices
+-- when switching within this Neovim session.
+local provider_models = { openrouter = M.defaults.model }
+
+local function valid_provider(provider)
+  return provider == "openrouter" or provider == "chatgpt"
+end
+
 ---Merge user options with defaults
 ---Priority: config file > setup() opts > env var > defaults
 ---@param opts SageConfig|nil
@@ -195,7 +219,7 @@ function M.setup(opts)
       vim.notify_once(
         "sage-llm: Created config file at "
           .. config_file.get_config_path()
-          .. "\nEdit it to add your API key.",
+          .. "\nUse :SageChatGPTLogin for a subscription, or set $OPENROUTER_API_KEY.",
         vim.log.levels.INFO
       )
     elseif create_err then
@@ -207,6 +231,11 @@ function M.setup(opts)
 
   -- Validate required fields
   M.validate()
+
+  provider_models = { openrouter = base.model }
+  if M.is_chatgpt_provider() then
+    M.options.model = M.options.chatgpt.model or "ChatGPT"
+  end
 end
 
 ---Validate configuration
@@ -215,9 +244,18 @@ function M.validate()
     error("sage-llm: rag config must be a table")
   end
 
+  if type(M.options.chatgpt) ~= "table" then
+    error("sage-llm: chatgpt config must be a table")
+  end
+
   vim.validate({
+    provider = { M.options.provider, "string" },
     model = { M.options.model, "string" },
     base_url = { M.options.base_url, "string" },
+    ["chatgpt.model"] = { M.options.chatgpt.model, "string", true },
+    ["chatgpt.auth_dir"] = { M.options.chatgpt.auth_dir, "string", true },
+    ["chatgpt.login_timeout_ms"] = { M.options.chatgpt.login_timeout_ms, "number" },
+    ["chatgpt.request_timeout_ms"] = { M.options.chatgpt.request_timeout_ms, "number" },
     ["response.width"] = { M.options.response.width, "number" },
     ["response.height"] = { M.options.response.height, "number" },
     ["input.width"] = { M.options.input.width, "number" },
@@ -241,6 +279,17 @@ function M.validate()
     system_prompt_no_selection = { M.options.system_prompt_no_selection, "string" },
     system_prompt_infill = { M.options.system_prompt_infill, "string" },
   })
+
+  if not valid_provider(M.options.provider) then
+    error("sage-llm: provider must be 'openrouter' or 'chatgpt'")
+  end
+
+  for _, key in ipairs({ "login_timeout_ms", "request_timeout_ms" }) do
+    local value = M.options.chatgpt[key]
+    if value < 1 or value == math.huge or value ~= math.floor(value) then
+      error("sage-llm: chatgpt." .. key .. " must be a positive finite integer")
+    end
+  end
 
   if M.options.rag.chunk_overlap >= M.options.rag.chunk_lines then
     error("sage-llm: rag.chunk_overlap must be smaller than rag.chunk_lines")
@@ -281,6 +330,47 @@ function M.get_api_key()
   return M.options.api_key or vim.env.OPENROUTER_API_KEY
 end
 
+---@return boolean
+function M.is_chatgpt_provider()
+  return M.options.provider == "chatgpt"
+end
+
+---@return boolean
+function M.supports_search()
+  return M.options.provider == "openrouter"
+end
+
+---@return boolean
+function M.supports_rag()
+  return M.options.provider == "openrouter"
+end
+
+---@param provider string
+---@param persist boolean|nil Whether to persist to config file (default: true)
+function M.set_provider(provider, persist)
+  vim.validate({ provider = { provider, "string" } })
+  if not valid_provider(provider) then
+    error("sage-llm: provider must be 'openrouter' or 'chatgpt'")
+  end
+
+  if not M.is_chatgpt_provider() then
+    provider_models[M.options.provider] = M.options.model
+  end
+  M.options.provider = provider
+  if M.is_chatgpt_provider() then
+    M.options.model = M.options.chatgpt.model or "ChatGPT"
+  else
+    M.options.model = provider_models.openrouter or M.defaults.model
+  end
+
+  if persist ~= false then
+    local ok, err = config_file.update("provider", provider)
+    if not ok and err then
+      vim.notify_once("sage-llm: Failed to save provider: " .. err, vim.log.levels.WARN)
+    end
+  end
+end
+
 ---Set dependency detection on/off
 ---@param enabled boolean
 function M.set_detect_dependencies(enabled)
@@ -297,11 +387,20 @@ end
 ---@param model string
 ---@param persist boolean|nil Whether to persist to config file (default: true)
 function M.set_model(model, persist)
+  vim.validate({ model = { model, "string" } })
   M.options.model = model
+
+  local key, value = "model", model
+  if M.is_chatgpt_provider() then
+    M.options.chatgpt.model = model
+    key, value = "chatgpt", M.options.chatgpt
+  else
+    provider_models[M.options.provider] = model
+  end
 
   -- Persist to config file by default
   if persist ~= false then
-    local ok, err = config_file.update("model", model)
+    local ok, err = config_file.update(key, value)
     if not ok and err then
       vim.notify_once("sage-llm: Failed to save model: " .. err, vim.log.levels.WARN)
     end
@@ -353,8 +452,11 @@ function M.remove_model(model, persist)
 
   table.remove(M.options.models, idx)
 
-  if M.options.model == model then
-    M.options.model = M.options.models[1]
+  if provider_models.openrouter == model then
+    provider_models.openrouter = M.options.models[1]
+    if M.options.provider == "openrouter" then
+      M.options.model = provider_models.openrouter
+    end
   end
 
   -- Persist to config file by default
@@ -364,7 +466,8 @@ function M.remove_model(model, persist)
       vim.notify_once("sage-llm: Failed to save models: " .. models_err, vim.log.levels.WARN)
     end
 
-    local model_ok, model_err = config_file.update("model", M.options.model)
+    local saved_model = M.is_chatgpt_provider() and provider_models.openrouter or M.options.model
+    local model_ok, model_err = config_file.update("model", saved_model)
     if not model_ok and model_err then
       vim.notify_once("sage-llm: Failed to save model: " .. model_err, vim.log.levels.WARN)
     end

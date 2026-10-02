@@ -52,4 +52,26 @@ describe("response window hide behavior", function()
 
     assert.same({ "Header", "", "Response line 1", "" }, lines)
   end)
+
+  it("removes the search keymap and footer when the provider lacks search", function()
+    response.open("Header")
+    response.set_on_toggle_search(function()
+      return true
+    end)
+    local bufnr = vim.api.nvim_get_current_buf()
+    local winid = vim.api.nvim_get_current_win()
+    local function has_search_keymap()
+      for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+        if keymap.lhs == "S" then
+          return true
+        end
+      end
+      return false
+    end
+    assert.is_true(has_search_keymap())
+    response.set_on_toggle_search(nil)
+    assert.is_false(has_search_keymap())
+    local footer = vim.api.nvim_win_get_config(winid).footer
+    assert.is_nil(vim.inspect(footer):find("search:", 1, true))
+  end)
 end)
