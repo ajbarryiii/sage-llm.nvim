@@ -323,6 +323,57 @@ describe("ChatGPT subscription provider", function()
     assert.equals(1, result.completions)
   end)
 
+  it("rejects delayed inference after another instance switches accounts or logs out", function()
+    options.chatgpt.model = nil
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+    assert.equals(1, #requests)
+    account_current = false
+    requests[1].opts.callback({
+      status = 200,
+      body = vim.json.encode({
+        models = { { slug = "old-account-model", display_name = "Old", visibility = "list" } },
+      }),
+    })
+    flush()
+    assert.equals(1, #requests)
+    assert.equals(0, result.completions)
+    assert.equals(1, #result.errors)
+    assert.matches("account changed", result.errors[1])
+    assert.same({}, result.tokens)
+    assert.is_true(requests[1].cancelled)
+    assert.is_nil(vim.uv.fs_stat(requests[1].header_dir))
+    -- A late callback cannot revive inference or emit a second terminal error.
+    requests[1].opts.on_error()
+    flush()
+    assert.equals(1, #requests)
+    assert.equals(1, #result.errors)
+  end)
+
+  for _, discover_model in ipairs({ false, true }) do
+    it(
+      "rejects a superseded token before " .. (discover_model and "model discovery" or "inference"),
+      function()
+        if discover_model then
+          options.chatgpt.model = nil
+        end
+        defer_auth = true
+        local result, callbacks = observe()
+        provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+        account_current = false
+        auth_callback("synthetic-test-access-token", nil, function()
+          return account_current
+        end)
+        flush()
+        assert.equals(0, #requests)
+        assert.equals(0, result.completions)
+        assert.equals(1, #result.errors)
+        assert.matches("account changed", result.errors[1])
+        assert.is_nil(vim.uv.fs_stat(auth_dir))
+      end
+    )
+  end
+
   it("fails if model discovery has no available choices", function()
     options.chatgpt.model = nil
     local result, callbacks = observe()

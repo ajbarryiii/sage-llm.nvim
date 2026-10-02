@@ -421,6 +421,7 @@ function M.stream_chat(messages, callbacks, request_opts)
   vim.validate({ messages = { messages, "table" }, callbacks = { callbacks, "table" } })
   local body = build_body(messages)
   local state = new_request()
+  local account_is_current
   local function finish(err)
     if state.finished or state.cancelled then
       return
@@ -534,6 +535,12 @@ function M.stream_chat(messages, callbacks, request_opts)
         finish("ChatGPT returned an invalid response event. Try again later.")
       end
     end
+    -- Model discovery may complete after another editor changes the shared
+    -- registration. Recheck at the point where inference consumes allowance.
+    if account_is_current and not account_is_current() then
+      finish("ChatGPT account changed. Try the request again.")
+      return
+    end
     local ok, job = pcall(curl.post, base_url .. "/responses", {
       headers = headers(),
       raw = curl_args(state),
@@ -609,12 +616,17 @@ function M.stream_chat(messages, callbacks, request_opts)
     state.track(job)
   end
 
-  state.track(auth.get_access_token(function(token, err)
+  state.track(auth.get_access_token(function(token, err, is_current)
     if state.cancelled or state.finished then
       return
     end
     if not token then
       finish(err or "Sign in with :SageChatGPTLogin to connect your ChatGPT plan.")
+      return
+    end
+    account_is_current = is_current
+    if account_is_current and not account_is_current() then
+      finish("ChatGPT account changed. Try the request again.")
       return
     end
     if not prepare_credentials(state, token) then
