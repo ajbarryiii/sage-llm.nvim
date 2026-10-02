@@ -11,6 +11,8 @@ describe("ChatGPT subscription authentication", function()
   local jwks_body
   local discovery
   local deferred_refresh
+  local deferred_jwks
+  local original_time
   local peers
   local peer_locks
   local verification_claims
@@ -131,6 +133,7 @@ describe("ChatGPT subscription authentication", function()
   end
 
   before_each(function()
+    original_time = os.time
     auth_dir = vim.fn.tempname()
     original_open = vim.ui.open
     originals = {}
@@ -150,6 +153,7 @@ describe("ChatGPT subscription authentication", function()
     verification_claims = {}
     revocation_statuses = { 200 }
     deferred_refresh = nil
+    deferred_jwks = nil
     token_status = 200
     token_response = {
       access_token = "new-access",
@@ -203,10 +207,14 @@ describe("ChatGPT subscription authentication", function()
           opts.callback({ status = token_status, body = vim.json.encode(token_response) })
         end
       elseif url:match("/jwks.json$") then
-        opts.callback({
-          status = jwks_status,
-          body = type(jwks_body) == "string" and jwks_body or vim.json.encode(jwks_body),
-        })
+        if deferred_jwks then
+          deferred_jwks.options = opts
+        else
+          opts.callback({
+            status = jwks_status,
+            body = type(jwks_body) == "string" and jwks_body or vim.json.encode(jwks_body),
+          })
+        end
       elseif url:match("/openid%-configuration$") then
         opts.callback({
           status = 200,
@@ -232,6 +240,7 @@ describe("ChatGPT subscription authentication", function()
   end)
 
   after_each(function()
+    os.time = original_time
     auth.cancel_login()
     vim.wait(50, function()
       return true
@@ -341,6 +350,45 @@ describe("ChatGPT subscription authentication", function()
     assert.equals(params.redirect_uri, requests[1].form.redirect_uri)
     assert.is_nil(uv.fs_stat(requests[1].options.body))
     assert_session_unlocked()
+  end)
+
+  it("refreshes expired login tokens even when identity verification was delayed", function()
+    local received_at = os.time()
+    local now = received_at
+    os.time = function()
+      return now
+    end
+    deferred_jwks = {}
+    local result
+    auth.login(function(ok, err)
+      result = { ok, err }
+    end)
+    callback_request()
+    wait_for(function()
+      return deferred_jwks.options ~= nil
+    end)
+    now = received_at + 90
+    deferred_jwks.options.callback({ status = 200, body = vim.json.encode(jwks_body) })
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.is_true(result[1])
+    assert.equals(received_at, verification_claims[1].time)
+    assert.equals(received_at + 3600, saved_credentials().expires_at)
+
+    now = received_at + 3601
+    deferred_jwks = nil
+    token_response.access_token = "refreshed-access"
+    local refreshed
+    auth.get_access_token(function(token)
+      refreshed = token
+    end)
+    wait_for(function()
+      return refreshed ~= nil
+    end)
+    assert.equals("refreshed-access", refreshed)
+    assert.equals("refresh_token", requests[3].form.grant_type)
+    assert.equals(now + 3600, saved_credentials().expires_at)
   end)
 
   it("rejects a mismatched callback state without consuming a valid attempt", function()

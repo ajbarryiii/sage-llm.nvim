@@ -983,7 +983,7 @@ function M.login(callback, opts)
         code_verifier = verifier,
         redirect_uri = redirect,
         resource = RESOURCE,
-      }, function(response, network_err)
+      }, function(response, network_err, received_at)
         if done then
           return
         end
@@ -1006,7 +1006,7 @@ function M.login(callback, opts)
             audience = client_id,
             nonce = nonce,
             subject = previous and previous.subject or nil,
-            time = os.time(),
+            time = received_at,
           })
           if not payload then
             finish(false, keys_err or "OpenAI returned an invalid ChatGPT identity")
@@ -1022,7 +1022,7 @@ function M.login(callback, opts)
             refresh_token = data.refresh_token,
             id_token = data.id_token,
             token_type = "Bearer",
-            expires_at = os.time() + data.expires_in,
+            expires_at = received_at + data.expires_in,
             scopes = granted,
           })
           finish(saved_ok == true, save_err)
