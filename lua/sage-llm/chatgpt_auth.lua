@@ -27,6 +27,14 @@ local JWKS = ISSUER .. "/.well-known/jwks.json"
 local RESOURCE = "https://api.openai.com/v1"
 local SCOPE = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 local SIGN_IN = "Sign in with :SageChatGPTLogin to connect your ChatGPT plan"
+local TERMINAL_REFRESH_ERRORS = {
+  invalid_grant = true,
+  invalid_refresh_token = true,
+  token_expired = true,
+  refresh_token_expired = true,
+  refresh_token_invalidated = true,
+  refresh_token_reused = true,
+}
 local login_attempt
 local refresh_waiters
 local active_requests = {}
@@ -383,7 +391,7 @@ end
 
 local function token_error(response)
   local data = decode_response(response)
-  if data and data.error == "invalid_grant" then
+  if data and TERMINAL_REFRESH_ERRORS[data.error] then
     return "ChatGPT authorization expired or was revoked. Sign in again with :SageChatGPTLogin"
   end
   return "OpenAI could not authorize your ChatGPT plan. Try signing in again"
@@ -771,7 +779,7 @@ function M.get_access_token(callback)
       }, function(response, network_err, received_at)
         local data = decode_response(response)
         if network_err or not response or response.status ~= 200 then
-          if data and data.error == "invalid_grant" then
+          if data and TERMINAL_REFRESH_ERRORS[data.error] then
             current.access_token = nil
             current.refresh_token = nil
             current.id_token = nil

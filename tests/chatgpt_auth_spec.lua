@@ -670,25 +670,91 @@ describe("ChatGPT subscription authentication", function()
     assert.is_nil(cancelled_result)
   end)
 
-  it("clears unusable renewable access when OpenAI rejects the refresh grant", function()
-    local expired = record()
-    expired.expires_at = os.time() - 5
-    write_credentials(expired)
-    token_status = 400
-    token_response = { error = "invalid_grant", error_description = "sensitive details" }
-    local result
-    auth.get_access_token(function(token, err)
-      result = { token, err }
+  for _, code in ipairs({
+    "invalid_grant",
+    "invalid_refresh_token",
+    "token_expired",
+    "refresh_token_expired",
+    "refresh_token_invalidated",
+    "refresh_token_reused",
+  }) do
+    it("clears unusable tokens without retrying a terminal " .. code .. " refresh error", function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      token_status = 400
+      token_response = { error = code, error_description = "sensitive details" }
+      local result
+      auth.get_access_token(function(token, err)
+        result = { token, err }
+      end)
+      wait_for(function()
+        return result ~= nil
+      end)
+      assert.is_nil(result[1])
+      assert.matches("Sign in again", result[2])
+      assert.is_nil(result[2]:find("sensitive", 1, true))
+      assert.is_false(auth.status().connected)
+      local saved = saved_credentials()
+      assert.is_nil(saved.access_token)
+      assert.is_nil(saved.refresh_token)
+      assert.is_nil(saved.id_token)
+      assert.is_nil(saved.expires_at)
+      assert.is_nil(saved.pending_refresh)
+      assert.same({}, saved.scopes)
+      assert.equals(expired.client_id, saved.client_id)
+      assert.equals(expired.subject, saved.subject)
+      assert.equals(expired.ext_agent_host_id, saved.ext_agent_host_id)
+      local retry
+      auth.get_access_token(function(token, err)
+        retry = { token, err }
+      end)
+      wait_for(function()
+        return retry ~= nil
+      end)
+      assert.is_nil(retry[1])
+      assert.matches("SageChatGPTLogin", retry[2])
+      assert.equals(1, #requests)
     end)
-    wait_for(function()
-      return result ~= nil
-    end)
-    assert.is_nil(result[1])
-    assert.matches("Sign in again", result[2])
-    assert.is_nil(result[2]:find("sensitive", 1, true))
-    assert.is_false(auth.status().connected)
-    assert.equals("oaiapp_existing", saved_credentials().client_id)
-  end)
+  end
+
+  for _, failure in ipairs({
+    { status = 503, error = "server_error" },
+    { status = 429, error = "temporarily_unavailable" },
+    { status = 400, error = "invalid_client" },
+  }) do
+    it(
+      "preserves renewable access after a nonterminal " .. failure.error .. " refresh error",
+      function()
+        local expired = record()
+        expired.expires_at = os.time() - 5
+        write_credentials(expired)
+        local renewed = vim.deepcopy(token_response)
+        token_status = failure.status
+        token_response = { error = failure.error }
+        local result
+        auth.get_access_token(function(token, err)
+          result = { token, err }
+        end)
+        wait_for(function()
+          return result ~= nil
+        end)
+        assert.is_nil(result[1])
+        assert.is_not_nil(result[2])
+        assert.same(expired, saved_credentials())
+        token_status = 200
+        token_response = renewed
+        local recovered
+        auth.get_access_token(function(token)
+          recovered = token
+        end)
+        wait_for(function()
+          return recovered ~= nil
+        end)
+        assert.equals("new-access", recovered)
+      end
+    )
+  end
 
   it("removes crash-orphaned OAuth forms and credential copies before local sign-out", function()
     write_credentials(record())
