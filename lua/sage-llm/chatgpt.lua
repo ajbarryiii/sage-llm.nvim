@@ -295,6 +295,10 @@ end
 function M.list_models(callback)
   vim.validate({ callback = { callback, "function" } })
   local state = new_request()
+  local account_is_current
+  local function catalog_is_current()
+    return state.is_current() and (not account_is_current or account_is_current())
+  end
   local function finish(models, err)
     if state.finished or state.cancelled then
       return
@@ -304,14 +308,25 @@ function M.list_models(callback)
       state.stop_handles()
     end
     state.cleanup()
-    state.deliver(callback, models, err, state.is_current)
+    state.deliver(function()
+      if not catalog_is_current() then
+        callback(nil, "ChatGPT account changed. Run :SageModel again.", catalog_is_current)
+        return
+      end
+      callback(models, err, catalog_is_current)
+    end)
   end
-  state.track(auth.get_access_token(function(token, err)
+  state.track(auth.get_access_token(function(token, err, is_current)
     if state.cancelled or state.finished then
       return
     end
     if not token then
       finish(nil, err or "Sign in with :SageChatGPTLogin to connect your ChatGPT plan.")
+      return
+    end
+    account_is_current = is_current
+    if account_is_current and not account_is_current() then
+      finish(nil, "ChatGPT account changed. Run :SageModel again.")
       return
     end
     if not prepare_credentials(state, token) then

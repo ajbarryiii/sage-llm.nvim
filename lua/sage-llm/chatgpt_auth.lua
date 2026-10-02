@@ -266,6 +266,15 @@ local function connected(record)
     and has_plan_scope(record.scopes)
 end
 
+---Bind account-specific results to the verified registration, not token rotations.
+local function account_guard(record)
+  local client_id, subject = record.client_id, record.subject
+  return function()
+    local current = credentials()
+    return connected(current) and current.client_id == client_id and current.subject == subject
+  end
+end
+
 local function encode(value)
   return (
     tostring(value):gsub("([^%w%-%.%_~])", function(byte)
@@ -638,7 +647,7 @@ function M.status()
   }
 end
 
----@param callback fun(token: string|nil, err: string|nil)
+---@param callback fun(token: string|nil, err: string|nil, is_current: (fun(): boolean)|nil)
 ---@return SageRequestHandle
 function M.get_access_token(callback)
   vim.validate({ callback = { callback, "function" } })
@@ -658,8 +667,9 @@ function M.get_access_token(callback)
     callback(nil, read_err or SIGN_IN)
     return handle
   end
+  caller.is_current = account_guard(record)
   if not record.pending_refresh and record.expires_at > os.time() + 60 then
-    callback(record.access_token)
+    callback(record.access_token, nil, caller.is_current)
     return handle
   end
   if refresh_waiters then
@@ -672,7 +682,7 @@ function M.get_access_token(callback)
     refresh_waiters = nil
     for _, waiter in ipairs(waiting or {}) do
       if not waiter.cancelled then
-        waiter.callback(token, err)
+        waiter.callback(token, err, token and waiter.is_current or nil)
       end
     end
   end

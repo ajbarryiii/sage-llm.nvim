@@ -8,6 +8,7 @@ describe("ChatGPT subscription provider", function()
   local auth_cancelled
   local defer_auth
   local auth_error
+  local account_current
   local modules = { "sage-llm.config", "sage-llm.chatgpt_auth", "plenary.curl", "sage-llm.chatgpt" }
 
   local function flush()
@@ -96,6 +97,7 @@ describe("ChatGPT subscription provider", function()
     auth_cancelled = false
     defer_auth = false
     auth_error = nil
+    account_current = true
     originals = { schedule = vim.schedule, loaded = {}, preload = {} }
     for _, name in ipairs(modules) do
       originals.loaded[name] = package.loaded[name]
@@ -116,7 +118,9 @@ describe("ChatGPT subscription provider", function()
             if auth_error then
               callback(nil, auth_error)
             else
-              callback("synthetic-test-access-token", nil)
+              callback("synthetic-test-access-token", nil, function()
+                return account_current
+              end)
             end
           end
           return {
@@ -233,6 +237,59 @@ describe("ChatGPT subscription provider", function()
     )
     assert.is_nil(err)
     assert.is_nil(vim.uv.fs_stat(requests[1].header_path))
+  end)
+
+  it("rejects a catalog queued before another instance changed accounts", function()
+    local result
+    provider.list_models(function(models, err, is_current)
+      result = { models = models, err = err, is_current = is_current }
+    end)
+    requests[1].opts.callback({
+      status = 200,
+      body = vim.json.encode({
+        models = { { slug = "account-a-model", display_name = "Account A", visibility = "list" } },
+      }),
+    })
+    account_current = false
+    flush()
+    assert.is_nil(result.models)
+    assert.matches("account changed", result.err)
+    assert.is_false(result.is_current())
+  end)
+
+  it("invalidates an already delivered catalog when the shared account changes", function()
+    local result
+    provider.list_models(function(models, err, is_current)
+      assert.is_nil(err)
+      result = { models = models, is_current = is_current }
+    end)
+    requests[1].opts.callback({
+      status = 200,
+      body = vim.json.encode({
+        models = { { slug = "account-a-model", display_name = "Account A", visibility = "list" } },
+      }),
+    })
+    flush()
+    assert.equals("account-a-model", result.models[1].slug)
+    assert.is_true(result.is_current())
+    account_current = false
+    assert.is_false(result.is_current())
+  end)
+
+  it("does not fetch models with an account superseded before token delivery", function()
+    defer_auth = true
+    local result
+    provider.list_models(function(models, err)
+      result = { models = models, err = err }
+    end)
+    account_current = false
+    auth_callback("synthetic-test-access-token", nil, function()
+      return account_current
+    end)
+    flush()
+    assert.equals(0, #requests)
+    assert.is_nil(result.models)
+    assert.matches("account changed", result.err)
   end)
 
   it("discovers the default account model instead of using the OpenRouter model", function()

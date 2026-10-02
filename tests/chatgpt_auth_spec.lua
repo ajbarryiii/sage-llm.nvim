@@ -352,6 +352,59 @@ describe("ChatGPT subscription authentication", function()
     assert_session_unlocked()
   end)
 
+  it("checks shared account identity without invalidating a catalog on token rotation", function()
+    local current = record()
+    write_credentials(current)
+    local guard
+    auth.get_access_token(function(token, err, is_current)
+      assert.equals(current.access_token, token)
+      assert.is_nil(err)
+      guard = is_current
+    end)
+    assert.is_true(guard())
+    local rotated = vim.deepcopy(current)
+    rotated.access_token = "rotated-access"
+    rotated.refresh_token = "rotated-refresh"
+    write_credentials(rotated)
+    assert.is_true(guard())
+    local workspace = vim.deepcopy(rotated)
+    workspace.client_id = "oaiapp_another_workspace"
+    write_credentials(workspace)
+    assert.is_false(guard())
+    local account = vim.deepcopy(rotated)
+    account.subject = "account-b"
+    write_credentials(account)
+    assert.is_false(guard())
+    write_credentials(rotated)
+    assert.is_true(guard())
+    rotated.access_token = nil
+    rotated.refresh_token = nil
+    write_credentials(rotated)
+    assert.is_false(guard())
+    uv.fs_unlink(auth_dir .. "/credentials.json")
+    assert.is_false(guard())
+  end)
+
+  it("returns a shared-account guard after renewing access", function()
+    local expired = record()
+    expired.expires_at = os.time() - 5
+    write_credentials(expired)
+    local guard
+    auth.get_access_token(function(token, err, is_current)
+      assert.equals("new-access", token)
+      assert.is_nil(err)
+      guard = is_current
+    end)
+    wait_for(function()
+      return guard ~= nil
+    end)
+    assert.is_true(guard())
+    local other = saved_credentials()
+    other.client_id = "oaiapp_another_workspace"
+    write_credentials(other)
+    assert.is_false(guard())
+  end)
+
   it("retains a first registration across a rejected code and editor restart", function()
     local valid_tokens = vim.deepcopy(token_response)
     token_status = 400
