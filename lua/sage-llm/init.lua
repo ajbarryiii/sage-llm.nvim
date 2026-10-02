@@ -20,6 +20,7 @@ local M = {}
 
 ---@class SageRequestOptions
 ---@field search boolean Enable web search by appending :online to model id
+---@field provider string|nil Provider selected when the question was submitted
 
 ---@type SageRequestOptions
 local request_opts = {
@@ -60,12 +61,24 @@ end
 local function consume_request_opts()
   local opts = {
     search = supports_search() and request_opts.search or false,
+    provider = config.options.provider or "openrouter",
   }
 
   request_opts.search = false
   ui.response.set_search_enabled(false)
 
   return opts
+end
+
+---Stop a pending query before assembling or sending context to a changed provider.
+---@param request SageRequestOptions
+---@return boolean
+local function check_query_provider(request)
+  if request.provider == (config.options.provider or "openrouter") then
+    return true
+  end
+  ui.response.show_error("Provider changed while loading context. Submit the question again.")
+  return false
 end
 
 ---Stream a response into the response window and conversation state
@@ -199,6 +212,9 @@ local function execute_query(sel, question, opts)
   ui.response.show_loading()
 
   local function submit_chat(rag_snippets)
+    if not check_query_provider(request) then
+      return
+    end
     local messages = prompt.build_messages(sel, question, {
       rag_snippets = rag_snippets,
     })
@@ -267,6 +283,9 @@ local function execute_simple_query(question, opts)
   ui.response.show_loading()
 
   local function submit_chat(rag_snippets)
+    if not check_query_provider(request) then
+      return
+    end
     local messages = prompt.build_messages_no_selection(question, {
       rag_snippets = rag_snippets,
     })

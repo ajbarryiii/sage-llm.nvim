@@ -63,8 +63,8 @@ describe("subscription conversation recovery", function()
       end,
     })
     stub("sage-llm.api", {
-      stream_chat = function(messages, callbacks)
-        requests[#requests + 1] = { messages = messages, callbacks = callbacks }
+      stream_chat = function(messages, callbacks, opts)
+        requests[#requests + 1] = { messages = messages, callbacks = callbacks, opts = opts }
         return {
           cancel = function()
             cancelled = cancelled + 1
@@ -160,6 +160,87 @@ describe("subscription conversation recovery", function()
     retry_and_check()
     current_handle.cancel()
     assert.equals(2, conversation.turn_count())
+  end)
+
+  for _, visual in ipairs({ false, true }) do
+    it(
+      "stops pending " .. (visual and "selection" or "general") .. " RAG when its provider changes",
+      function()
+        local config = require("sage-llm.config")
+        config.options.provider = "openrouter"
+        config.options.rag.enabled = true
+        config.supports_rag = function()
+          return config.options.provider == "openrouter"
+        end
+        config.supports_search = config.supports_rag
+        if visual then
+          require("sage-llm.selection").get_visual_selection = function()
+            return { bufnr = 1 }
+          end
+        end
+        local built = 0
+        local prompt = require("sage-llm.prompt")
+        prompt.format_code_header = function()
+          return "selection"
+        end
+        prompt.build_messages = function()
+          built = built + 1
+          return {}
+        end
+        prompt.build_messages_no_selection = prompt.build_messages
+        local retrieval_callback
+        require("sage-llm.rag").retrieve_context = function(_, callback)
+          retrieval_callback = callback
+          return { cancel = function() end }
+        end
+        require("sage-llm.ui").input.open = function(opts)
+          opts.on_toggle_search()
+          opts.on_submit("pending OpenRouter question")
+        end
+        sage.ask()
+        assert.is_not_nil(retrieval_callback)
+        assert.equals(1, #requests)
+        config.options.provider = "chatgpt"
+        retrieval_callback({ { content = "Private repository context" } }, nil)
+        assert.equals(1, #requests)
+        assert.equals(0, built)
+        assert.equals(1, #errors)
+        assert.matches("Provider changed", errors[1])
+        assert.equals(1, conversation.turn_count())
+      end
+    )
+  end
+
+  it("keeps RAG context and search for a pending query whose provider stays selected", function()
+    local config = require("sage-llm.config")
+    config.options.provider = "openrouter"
+    config.options.rag.enabled = true
+    config.supports_rag = function()
+      return true
+    end
+    config.supports_search = config.supports_rag
+    local snippets = { { content = "Repository context" } }
+    require("sage-llm.prompt").build_messages_no_selection = function(text, opts)
+      assert.same(snippets, opts.rag_snippets)
+      return { { role = "user", content = text .. " with repository context" } }
+    end
+    local retrieval_callback
+    require("sage-llm.rag").retrieve_context = function(_, callback)
+      retrieval_callback = callback
+      return { cancel = function() end }
+    end
+    require("sage-llm.ui").input.open = function(opts)
+      opts.on_toggle_search()
+      opts.on_submit("pending question")
+    end
+    sage.ask()
+    assert.equals(1, #requests)
+    retrieval_callback(snippets, nil)
+    assert.equals(2, #requests)
+    assert.equals("pending question with repository context", requests[2].messages[1].content)
+    assert.is_true(requests[2].opts.search)
+    assert.equals("openrouter", requests[2].opts.provider)
+    assert.same({}, errors)
   end)
 
   it("keeps provider and model unchanged after unsuccessful sign-in", function()
