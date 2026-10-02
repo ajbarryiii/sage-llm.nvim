@@ -361,6 +361,35 @@ local function completed_text(response)
   return table.concat(parts, "")
 end
 
+---@param response table|nil
+---@return string|nil
+local function completed_refusal(response)
+  local parts = {}
+  local found = false
+  if type(response) ~= "table" or type(response.output) ~= "table" then
+    return nil
+  end
+  for _, item in ipairs(response.output) do
+    if type(item) == "table" and item.type == "message" and type(item.content) == "table" then
+      for _, part in ipairs(item.content) do
+        if type(part) == "table" and part.type == "refusal" then
+          found = true
+          table.insert(parts, type(part.refusal) == "string" and part.refusal or "")
+        end
+      end
+    end
+  end
+  return found and table.concat(parts, "\n") or nil
+end
+
+local function refusal_message(text)
+  -- Model refusal explanations are display content, unlike untrusted transport
+  -- errors. Normalize controls/newlines for the response window's error line.
+  local explanation = vim.trim(text:gsub("%c", " ")):gsub("%s+", " ")
+  return explanation == "" and "ChatGPT declined this request."
+    or "ChatGPT declined this request: " .. explanation
+end
+
 ---Stream text using the OAuth grant for the user's ChatGPT plan.
 ---@param messages table[]
 ---@param callbacks SageStreamCallbacks
@@ -404,6 +433,19 @@ function M.stream_chat(messages, callbacks, request_opts)
       return
     end
     local text_parts = {}
+    local refusal_parts = {}
+    local refusal_order = {}
+    local refusal_seen = false
+    local function record_refusal(data, text, append)
+      local key = tostring(data.item_id or data.output_index or "")
+        .. ":"
+        .. tostring(data.content_index or 0)
+      if refusal_parts[key] == nil then
+        table.insert(refusal_order, key)
+      end
+      refusal_parts[key] = append and ((refusal_parts[key] or "") .. text) or text
+      refusal_seen = true
+    end
     local completed = false
     local pending_data = {}
     local function event(data)
@@ -422,13 +464,31 @@ function M.stream_chat(messages, callbacks, request_opts)
           return
         end
         completed = true
-        if #text_parts == 0 then
+        local refusal = completed_refusal(data.response)
+        if refusal ~= nil then
+          refusal_seen = true
+          refusal_parts = { completed = refusal }
+          refusal_order = { "completed" }
+        end
+        if not refusal_seen and #text_parts == 0 then
           local text = completed_text(data.response)
           if text ~= "" then
             table.insert(text_parts, text)
             state.deliver(callbacks.on_token, text)
           end
         end
+      elseif data.type == "response.refusal.delta" and not completed then
+        if type(data.delta) ~= "string" then
+          finish("ChatGPT returned an invalid refusal event. Try again later.")
+          return
+        end
+        record_refusal(data, data.delta, true)
+      elseif data.type == "response.refusal.done" and not completed then
+        if type(data.refusal) ~= "string" then
+          finish("ChatGPT returned an invalid refusal event. Try again later.")
+          return
+        end
+        record_refusal(data, data.refusal, false)
       elseif data.type == "response.output_text.delta" and not completed then
         if type(data.delta) ~= "string" then
           finish("ChatGPT returned invalid response text. Try again later.")
@@ -505,6 +565,12 @@ function M.stream_chat(messages, callbacks, request_opts)
         end
         if not completed then
           finish("The ChatGPT stream ended before completion. Try again.")
+        elseif refusal_seen then
+          local explanations = {}
+          for _, key in ipairs(refusal_order) do
+            table.insert(explanations, refusal_parts[key])
+          end
+          finish(refusal_message(table.concat(explanations, "\n")))
         elseif not table.concat(text_parts, ""):find("%S") then
           finish(
             "ChatGPT completed the request without an answer. Try again or choose another model."

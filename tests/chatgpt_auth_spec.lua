@@ -749,6 +749,52 @@ describe("ChatGPT subscription authentication", function()
   )
 
   it(
+    "preserves an already received rotating grant on exit and verifies it after restart",
+    function()
+      local expired = record()
+      expired.expires_at = os.time() - 5
+      write_credentials(expired)
+      deferred_refresh = {}
+      local delivered
+      auth.get_access_token(function(token)
+        delivered = token
+      end)
+      wait_for(function()
+        return deferred_refresh.options ~= nil
+      end)
+      deferred_refresh.options.callback({ status = 200, body = vim.json.encode(token_response) })
+      assert.is_nil(saved_credentials().pending_refresh)
+      vim.api.nvim_exec_autocmds("VimLeavePre", { group = "SageChatGPTAuth" })
+      local staged = saved_credentials()
+      assert.equals("old-access", staged.access_token)
+      assert.equals("new-refresh", staged.pending_refresh.tokens.refresh_token)
+      assert.equals(0, #verification_claims)
+      assert_session_unlocked()
+      vim.wait(100, function()
+        return false
+      end, 5)
+      assert.is_nil(delivered)
+      assert.equals(1, #requests)
+
+      package.loaded["sage-llm.chatgpt_auth"] = nil
+      auth = require("sage-llm.chatgpt_auth")
+      local result
+      auth.get_access_token(function(token, err)
+        result = { token, err }
+      end)
+      wait_for(function()
+        return result ~= nil
+      end)
+      assert.same({ "new-access" }, result)
+      assert.equals(2, #requests)
+      assert.matches("/jwks.json$", requests[2].url)
+      assert.equals(1, #verification_claims)
+      assert.is_nil(saved_credentials().pending_refresh)
+      assert.equals("new-refresh", saved_credentials().refresh_token)
+    end
+  )
+
+  it(
     "suppresses a successful refresh callback already queued when exiting with pending logout",
     function()
       local expired = record()

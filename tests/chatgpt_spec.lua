@@ -553,6 +553,91 @@ describe("ChatGPT subscription provider", function()
     assert.is_nil(vim.uv.fs_stat(requests[1].header_path))
   end)
 
+  it(
+    "reports streamed refusals distinctly without duplicate text or empty-answer advice",
+    function()
+      local result, callbacks = observe()
+      provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+      emit(requests[1], { type = "response.refusal.delta", delta = "I cannot " })
+      emit(requests[1], { type = "response.refusal.delta", delta = "help with that." })
+      emit(requests[1], { type = "response.refusal.done", refusal = "I cannot help with that." })
+      complete(requests[1])
+      assert.same({}, result.tokens)
+      assert.equals(0, result.completions)
+      assert.same({ "ChatGPT declined this request: I cannot help with that." }, result.errors)
+      assert.is_nil(vim.uv.fs_stat(requests[1].header_path))
+      assert.is_nil(vim.uv.fs_stat(requests[1].body_path))
+    end
+  )
+
+  it("surfaces completed refusal content when there are no refusal deltas", function()
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+    emit(requests[1], {
+      type = "response.completed",
+      response = {
+        status = "completed",
+        output = {
+          {
+            type = "message",
+            content = {
+              { type = "refusal", refusal = "I cannot help.\nPlease ask about another topic." },
+            },
+          },
+        },
+      },
+    })
+    requests[1].opts.callback({ status = 200, body = "" })
+    flush()
+    assert.same({}, result.tokens)
+    assert.equals(0, result.completions)
+    assert.same(
+      { "ChatGPT declined this request: I cannot help. Please ask about another topic." },
+      result.errors
+    )
+  end)
+
+  it("keeps separate finalized refusal parts without repeating their deltas", function()
+    local result, callbacks = observe()
+    provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)
+    emit(
+      requests[1],
+      { type = "response.refusal.delta", item_id = "message", content_index = 0, delta = "Cannot " }
+    )
+    emit(requests[1], {
+      type = "response.refusal.done",
+      item_id = "message",
+      content_index = 0,
+      refusal = "Cannot do this.",
+    })
+    emit(requests[1], {
+      type = "response.refusal.done",
+      item_id = "message",
+      content_index = 1,
+      refusal = "Try a different topic.",
+    })
+    complete(requests[1])
+    assert.same(
+      { "ChatGPT declined this request: Cannot do this. Try a different topic." },
+      result.errors
+    )
+  end)
+
+  it(
+    "returns a refusal as an error to infill callers instead of previewing partial text",
+    function()
+      local result
+      provider.chat({ { role = "user", content = "Replace this code" } }, function(text, err)
+        result = { text = text, err = err }
+      end)
+      emit(requests[1], { type = "response.output_text.delta", delta = "partial code" })
+      emit(requests[1], { type = "response.refusal.done", refusal = "I cannot provide that code." })
+      complete(requests[1])
+      assert.is_nil(result.text)
+      assert.equals("ChatGPT declined this request: I cannot provide that code.", result.err)
+    end
+  )
+
   it("parses multiline SSE JSON and CRLF without raw chunk buffering", function()
     local result, callbacks = observe()
     provider.stream_chat({ { role = "user", content = "Hello" } }, callbacks)

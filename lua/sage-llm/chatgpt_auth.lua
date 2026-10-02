@@ -35,6 +35,7 @@ local held_locks = {}
 local cleanup_registered = false
 local exiting = false
 local pending_logouts = {}
+local ready_responses = {}
 
 local function register_cleanup()
   if cleanup_registered then
@@ -45,6 +46,12 @@ local function register_cleanup()
     group = vim.api.nvim_create_augroup("SageChatGPTAuth", { clear = true }),
     callback = function()
       exiting = true
+      -- A received rotating grant must survive even if its scheduled callback
+      -- has not run. Stage it while its session lock is still held; pending
+      -- logout cleanup below will then remove it if sign-out was requested.
+      for preserve in pairs(ready_responses) do
+        preserve()
+      end
       if login_attempt then
         login_attempt.cancel()
       end
@@ -260,7 +267,7 @@ local function form_encode(values)
 end
 
 -- Form bodies live in owner-only files rather than curl's process arguments.
-local function request(url, form, callback)
+local function request(url, form, callback, on_exit)
   local done = false
   local job
   local body_path
@@ -276,9 +283,30 @@ local function request(url, form, callback)
     if body_path then
       uv.fs_unlink(body_path)
     end
+    local waiting = true
+    local received_at = os.time()
+    local preserve
+    if on_exit and response then
+      preserve = function()
+        if not waiting then
+          return
+        end
+        waiting = false
+        ready_responses[preserve] = nil
+        on_exit(response, err, received_at)
+      end
+      ready_responses[preserve] = true
+    end
     vim.schedule(function()
+      if not waiting then
+        return
+      end
+      waiting = false
+      if preserve then
+        ready_responses[preserve] = nil
+      end
       if not exiting then
-        callback(response, err)
+        callback(response, err, received_at)
       end
     end)
   end
@@ -702,7 +730,7 @@ function M.get_access_token(callback)
         client_id = current.client_id,
         refresh_token = current.refresh_token,
         resource = RESOURCE,
-      }, function(response, network_err)
+      }, function(response, network_err, received_at)
         local data = decode_response(response)
         if network_err or not response or response.status ~= 200 then
           if data and data.error == "invalid_grant" then
@@ -718,7 +746,22 @@ function M.get_access_token(callback)
           finish(nil, network_err or token_error(response))
           return
         end
-        verify_and_save(data, os.time(), false)
+        verify_and_save(data, received_at, false)
+      end, function(response, network_err, received_at)
+        local data = decode_response(response)
+        if network_err or response.status ~= 200 or not validate_tokens(data, current) then
+          return
+        end
+        -- Do not activate credentials or perform network requests during exit.
+        -- The next process verifies this staged identity before using the grant.
+        current.pending_refresh = { tokens = data, received_at = received_at }
+        local ok = save_record(directory() .. "/credentials.json", current)
+        if not ok then
+          vim.notify(
+            "sage-llm: Could not save ChatGPT renewal during exit. Sign in again on next startup",
+            vim.log.levels.WARN
+          )
+        end
       end)
     end
     if current.pending_refresh then

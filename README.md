@@ -75,7 +75,7 @@ use {
 
 Run `:SageChatGPTLogin`, continue with ChatGPT in your browser, and approve permission to use your plan. After sign-in, choose a model from your account's catalog. Sage selects the ChatGPT provider and saves your choice. Then use `:SageAsk`, `:SageExplain`, `:SageFix`, follow-ups, and `:SageInfill` as usual.
 
-This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) flow and [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). Availability and usage are subject to your account, workspace, and plan limits; manage the app's allowance in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Sage does not fall back to paid API requests when subscription usage fails.
+This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) flow and [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). Availability and usage are subject to your account, workspace, and plan limits; manage the app's allowance in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Sage does not fall back to paid API requests when subscription usage fails. Model refusals show the explanation as a declined request; infill does not offer refused output as replacement code.
 
 - `:SageChatGPTStatus` shows your connection and selected model.
 - `:SageModel` → **ChatGPT subscription...** refreshes your account's available models.
