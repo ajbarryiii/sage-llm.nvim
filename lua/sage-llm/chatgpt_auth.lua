@@ -885,6 +885,35 @@ function M.login(callback, opts)
     return { cancel = function() end }
   end
   local host, host_err = host_id()
+  local previous = not opts.new_account and saved or nil
+  local registration
+  if host and not previous then
+    local candidate, registration_err = read_json(directory() .. "/pending_registration.json")
+    if registration_err then
+      callback(false, registration_err)
+      return { cancel = function() end }
+    end
+    if candidate then
+      if
+        candidate.issuer ~= ISSUER
+        or type(candidate.client_id) ~= "string"
+        or candidate.client_id == ""
+        or candidate.client_id == "dynamic_agent_client"
+        or candidate.ext_agent_host_id ~= host
+      then
+        callback(false, "Invalid pending ChatGPT registration")
+        return { cancel = function() end }
+      end
+      if
+        candidate.origin_client_id == (saved and saved.client_id)
+        and candidate.origin_subject == (saved and saved.subject)
+      then
+        registration = candidate
+      end
+    end
+  end
+  local selected_client_id = previous and previous.client_id
+    or registration and registration.client_id
   local state = crypto.random_token()
   local nonce = crypto.random_token()
   local verifier = crypto.random_token()
@@ -893,7 +922,6 @@ function M.login(callback, opts)
     callback(false, host_err or "Could not initialize secure ChatGPT sign-in")
     return { cancel = function() end }
   end
-  local previous = not opts.new_account and saved or nil
   local attempt = { peers = {} }
   login_attempt = attempt
   local server = uv.new_tcp()
@@ -944,7 +972,7 @@ function M.login(callback, opts)
   local address = server:getsockname()
   local redirect = "http://127.0.0.1:" .. address.port .. "/auth/callback"
   local values = {
-    client_id = previous and previous.client_id or "dynamic_agent_client",
+    client_id = selected_client_id or "dynamic_agent_client",
     ext_agent_host_id = host,
     response_type = "code",
     redirect_uri = redirect,
@@ -957,7 +985,7 @@ function M.login(callback, opts)
   }
   if previous then
     values.login_hint = previous.email
-  else
+  elseif not selected_client_id then
     values.agent_name_hint = "sage-llm.nvim"
   end
   local function exchange(query)
@@ -978,7 +1006,23 @@ function M.login(callback, opts)
         finish(false, "ChatGPT account changed during sign-in. Try again")
         return
       end
-      local client_id = previous and previous.client_id or query.client_id
+      local client_id = selected_client_id or query.client_id
+      if not previous then
+        -- An issued public client ID is registration metadata, not a verified
+        -- identity. Keep it separate so a rejected code can restart OAuth
+        -- without creating another registration or changing an active account.
+        local retained, retain_err = save_record(directory() .. "/pending_registration.json", {
+          issuer = ISSUER,
+          client_id = client_id,
+          ext_agent_host_id = host,
+          origin_client_id = saved and saved.client_id,
+          origin_subject = saved and saved.subject,
+        })
+        if not retained then
+          finish(false, retain_err)
+          return
+        end
+      end
       pending = request(TOKEN, {
         grant_type = "authorization_code",
         client_id = client_id,
@@ -991,7 +1035,14 @@ function M.login(callback, opts)
           return
         end
         if network_err or not response or response.status ~= 200 then
-          finish(false, network_err or token_error(response))
+          local failed = decode_response(response)
+          local retry_command = ":SageChatGPTLogin" .. (opts.new_account and saved and "!" or "")
+          local exchange_err = token_error(response)
+          if failed and failed.error == "invalid_grant" then
+            exchange_err = "ChatGPT authorization code was rejected. Retry sign-in with "
+              .. retry_command
+          end
+          finish(false, network_err or exchange_err)
           return
         end
         local data = decode_response(response)
@@ -1028,6 +1079,9 @@ function M.login(callback, opts)
             expires_at = received_at + data.expires_in,
             scopes = granted,
           })
+          if saved_ok and not previous then
+            uv.fs_unlink(directory() .. "/pending_registration.json")
+          end
           finish(saved_ok == true, save_err)
         end)
       end)
@@ -1094,8 +1148,11 @@ function M.login(callback, opts)
       if
         not query.code
         or query.code == ""
-        or (previous and issued and issued ~= previous.client_id)
-        or (not previous and (not issued or issued == "" or issued == "dynamic_agent_client"))
+        or (selected_client_id and issued and issued ~= selected_client_id)
+        or (
+          not selected_client_id
+          and (not issued or issued == "" or issued == "dynamic_agent_client")
+        )
       then
         respond(peer, "400 Bad Request", "Incomplete sign-in request.")
         return

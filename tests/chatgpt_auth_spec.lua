@@ -352,6 +352,92 @@ describe("ChatGPT subscription authentication", function()
     assert_session_unlocked()
   end)
 
+  it("retains a first registration across a rejected code and editor restart", function()
+    local valid_tokens = vim.deepcopy(token_response)
+    token_status = 400
+    token_response = { error = "invalid_grant" }
+    local failed
+    auth.login(function(ok, err)
+      failed = { ok, err }
+    end)
+    local initial = query(opened)
+    callback_request()
+    wait_for(function()
+      return failed ~= nil
+    end)
+    assert.is_false(failed[1])
+    assert.matches("SageChatGPTLogin", failed[2])
+    assert.is_false(auth.status().connected)
+    assert.is_nil(uv.fs_stat(auth_dir .. "/credentials.json"))
+    local pending_path = auth_dir .. "/pending_registration.json"
+    local pending = vim.json.decode(table.concat(vim.fn.readfile(pending_path), "\n"))
+    assert.equals("oaiapp_registered", pending.client_id)
+    assert.equals(initial.ext_agent_host_id, pending.ext_agent_host_id)
+    assert.is_nil(pending.subject)
+    assert.is_nil(pending.access_token)
+    assert.is_nil(pending.refresh_token)
+    assert.equals(384, uv.fs_stat(pending_path).mode % 512)
+    package.loaded["sage-llm.chatgpt_auth"] = nil
+    auth = require("sage-llm.chatgpt_auth")
+    token_status = 200
+    token_response = valid_tokens
+    local result
+    auth.login(function(ok, err)
+      result = { ok, err }
+    end)
+    local resumed = query(opened)
+    assert.equals("oaiapp_registered", resumed.client_id)
+    assert.equals(initial.ext_agent_host_id, resumed.ext_agent_host_id)
+    assert.is_nil(resumed.agent_name_hint)
+    assert.is_not.equals(initial.state, resumed.state)
+    assert.is_not.equals(initial.nonce, resumed.nonce)
+    assert.is_not.equals(initial.code_challenge, resumed.code_challenge)
+    callback_request({ code = "fresh-code", state = resumed.state })
+    wait_for(function()
+      return result ~= nil
+    end)
+    assert.is_true(result[1])
+    assert.equals("oaiapp_registered", requests[2].form.client_id)
+    assert.equals("oaiapp_registered", verification_claims[1].audience)
+    assert.equals("account-a", saved_credentials().subject)
+    assert.is_nil(uv.fs_stat(pending_path))
+  end)
+
+  it("keeps an interrupted new registration separate from the active account", function()
+    local active = record()
+    write_credentials(active)
+    token_status = 400
+    token_response = { error = "invalid_grant" }
+    local failed
+    auth.login(function(ok, err)
+      failed = { ok, err }
+    end, { new_account = true })
+    callback_request()
+    wait_for(function()
+      return failed ~= nil
+    end)
+    assert.is_false(failed[1])
+    assert.matches("SageChatGPTLogin!", failed[2])
+    assert.same(active, saved_credentials())
+    auth.login(function() end)
+    assert.equals(active.client_id, query(opened).client_id)
+    auth.cancel_login()
+    auth.login(function() end, { new_account = true })
+    local resumed = query(opened)
+    assert.equals("oaiapp_registered", resumed.client_id)
+    assert.is_nil(resumed.login_hint)
+    assert.is_nil(resumed.id_token_hint)
+    local response = callback_request({
+      code = "wrong-client-code",
+      state = resumed.state,
+      client_id = "oaiapp_other",
+    })
+    assert.matches("400 Bad Request", response)
+    assert.equals(1, #requests)
+    assert.same(active, saved_credentials())
+    auth.cancel_login()
+  end)
+
   it("refreshes expired login tokens even when identity verification was delayed", function()
     local received_at = os.time()
     local now = received_at
