@@ -31,7 +31,11 @@ local function cancel_handle(handle)
     -- Plenary's shutdown closes pipes and the process handle without signalling
     -- the process. Stop curl before closing its handle to stop the HTTP request.
     if handle.handle and type(handle.handle.kill) == "function" then
-      pcall(handle.handle.kill, handle.handle, "sigterm")
+      local ok, result = pcall(handle.handle.kill, handle.handle, "sigterm")
+      if ok and result == 0 then
+        -- Let Plenary reap the terminated process before closing its handle.
+        return
+      end
     end
     pcall(handle.shutdown, handle)
   end

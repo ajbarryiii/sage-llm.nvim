@@ -2,6 +2,20 @@ local config = require("sage-llm.config")
 local curl = require("plenary.curl")
 
 local M = {}
+local openrouter_chat
+
+local function cancel_job(job)
+  if job and job.handle and job.handle.kill then
+    local ok, result = pcall(job.handle.kill, job.handle, "sigterm")
+    if ok and result == 0 then
+      -- Keep the process handle open until Plenary observes and reaps its exit.
+      return
+    end
+  end
+  if job and job.shutdown then
+    pcall(job.shutdown, job)
+  end
+end
 
 -- Debug helper that works in fast event context
 local function debug_log(msg)
@@ -178,14 +192,16 @@ function M.stream_chat(messages, callbacks, request_opts)
   end
 
   local url = config.options.base_url .. "/chat/completions"
+  local model = resolve_model_id(request_opts)
 
   local body = vim.json.encode({
-    model = resolve_model_id(request_opts),
+    model = model,
     messages = messages,
     stream = true,
   })
 
   local cancelled = false
+  local retry_handle
 
   local token_count = 0
   local content_length = 0 -- total characters of actual content received
@@ -259,6 +275,9 @@ function M.stream_chat(messages, callbacks, request_opts)
         return
       end
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         if callbacks.on_error then
           callbacks.on_error("Network error: " .. vim.inspect(err))
         end
@@ -270,6 +289,9 @@ function M.stream_chat(messages, callbacks, request_opts)
       end
 
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         debug_log("stream callback fired")
         if not response then
           if callbacks.on_error then
@@ -363,7 +385,7 @@ function M.stream_chat(messages, callbacks, request_opts)
               -- with stream=false often succeeds via a different code path
               -- on the provider side.
               debug_log("stream fallback: no content found in body, retrying without streaming")
-              M.chat(messages, function(content, err)
+              retry_handle = openrouter_chat(messages, function(content, err)
                 if cancelled then
                   return
                 end
@@ -377,7 +399,10 @@ function M.stream_chat(messages, callbacks, request_opts)
                   debug_log("stream fallback: non-streaming retry failed: " .. tostring(err))
                   callbacks.on_error(err or "No content received from model")
                 end
-              end, request_opts)
+              end, { api_key = api_key, url = url, model = model })
+              if cancelled and retry_handle then
+                retry_handle.cancel()
+              end
               return -- Don't call on_complete here; the retry callback handles it
             end
           end
@@ -394,41 +419,35 @@ function M.stream_chat(messages, callbacks, request_opts)
   return {
     cancel = function()
       cancelled = true
-      if job and job.shutdown then
-        job:shutdown()
+      if retry_handle then
+        retry_handle.cancel()
       end
+      cancel_job(job)
     end,
   },
     nil
 end
 
----Make a non-streaming chat completion request (for simpler use cases)
 ---@param messages table[] Array of {role, content} messages
 ---@param callback function Called with (response_text, error)
----@param request_opts {search: boolean}|nil
+---@param request {api_key: string|nil, url: string, model: string}
 ---@return SageRequestHandle|nil
-function M.chat(messages, callback, request_opts)
-  if config.options.provider == "chatgpt" then
-    return require("sage-llm.chatgpt").chat(messages, callback, request_opts)
-  end
-
-  local api_key = config.get_api_key()
+openrouter_chat = function(messages, callback, request)
+  local api_key = request.api_key
   if not api_key then
     callback(nil, "No API key found. Set $OPENROUTER_API_KEY or configure api_key in setup()")
     return nil
   end
 
-  local url = config.options.base_url .. "/chat/completions"
-
   local body = vim.json.encode({
-    model = resolve_model_id(request_opts),
+    model = request.model,
     messages = messages,
     stream = false,
   })
 
   local cancelled = false
 
-  local job = curl.post(url, {
+  local job = curl.post(request.url, {
     headers = build_headers(api_key),
     body = body,
     on_error = function(err)
@@ -436,6 +455,9 @@ function M.chat(messages, callback, request_opts)
         return
       end
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         callback(nil, "Network error: " .. vim.inspect(err))
       end)
     end,
@@ -457,6 +479,9 @@ function M.chat(messages, callback, request_opts)
       end
 
       vim.schedule(function()
+        if cancelled then
+          return
+        end
         debug_log("inside vim.schedule")
 
         if not response then
@@ -497,11 +522,26 @@ function M.chat(messages, callback, request_opts)
   return {
     cancel = function()
       cancelled = true
-      if job and job.shutdown then
-        job:shutdown()
-      end
+      cancel_job(job)
     end,
   }
+end
+
+---Make a non-streaming chat completion request (for simpler use cases)
+---@param messages table[] Array of {role, content} messages
+---@param callback function Called with (response_text, error)
+---@param request_opts {search: boolean}|nil
+---@return SageRequestHandle|nil
+function M.chat(messages, callback, request_opts)
+  if config.options.provider == "chatgpt" then
+    return require("sage-llm.chatgpt").chat(messages, callback, request_opts)
+  end
+
+  return openrouter_chat(messages, callback, {
+    api_key = config.get_api_key(),
+    url = config.options.base_url .. "/chat/completions",
+    model = resolve_model_id(request_opts),
+  })
 end
 
 ---Create embeddings for one or more inputs

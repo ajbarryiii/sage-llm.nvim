@@ -366,10 +366,13 @@ local function request(url, form, callback, on_exit)
   end
   handle = {
     cancel = function()
+      local killed = false
       if job and job.handle and job.handle.kill then
-        pcall(job.handle.kill, job.handle, "sigterm")
+        local kill_ok, kill_result = pcall(job.handle.kill, job.handle, "sigterm")
+        killed = kill_ok and kill_result == 0
       end
-      if job and job.shutdown then
+      -- A signalled process must remain open until Plenary reaps its exit.
+      if not killed and job and job.shutdown then
         pcall(job.shutdown, job)
       end
       finish(nil, "OpenAI request cancelled")
