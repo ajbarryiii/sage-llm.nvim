@@ -40,6 +40,15 @@ describe("config", function()
       assert.equals(30000, config.defaults.chatgpt.request_timeout_ms)
     end)
 
+    it("has T3 CLI defaults without a fixed destination", function()
+      assert.equals("t3", config.defaults.t3.command)
+      assert.equals(15000, config.defaults.t3.timeout_ms)
+      assert.equals(600000, config.defaults.t3.response_timeout_ms)
+      assert.equals(500, config.defaults.t3.poll_interval_ms)
+      assert.is_nil(config.defaults.t3.base_dir)
+      assert.is_nil(config.defaults.t3.project)
+    end)
+
     it("has detect_dependencies disabled by default", function()
       assert.is_false(config.defaults.detect_dependencies)
     end)
@@ -65,6 +74,35 @@ describe("config", function()
   end)
 
   describe("setup", function()
+    it("merges T3 CLI configuration", function()
+      config.setup({ t3 = { command = "/opt/t3", project = "my-project", base_dir = "/data/t3" } })
+      assert.equals("/opt/t3", config.options.t3.command)
+      assert.equals("my-project", config.options.t3.project)
+      assert.equals("/data/t3", config.options.t3.base_dir)
+      assert.equals(15000, config.options.t3.timeout_ms)
+    end)
+
+    it("rejects invalid T3 configuration", function()
+      for _, value in ipairs({
+        false,
+        { command = "" },
+        { command = {} },
+        { project = false },
+        { base_dir = "" },
+        { timeout_ms = 0 },
+        { timeout_ms = 1.5 },
+        { timeout_ms = math.huge },
+        { response_timeout_ms = 0 },
+        { response_timeout_ms = math.huge },
+        { poll_interval_ms = 0 },
+        { poll_interval_ms = 1.5 },
+      }) do
+        assert.has_error(function()
+          config.setup({ t3 = value })
+        end)
+      end
+    end)
+
     it("merges user options with defaults", function()
       config.setup({
         model = "openai/gpt-4o",
