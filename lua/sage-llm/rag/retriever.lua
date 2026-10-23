@@ -130,7 +130,7 @@ function M.search(index, query, rag_opts, on_complete)
   end
 
   local cancelled = false
-  local inflight = nil
+  local inflight
 
   inflight = api.embeddings(query, rag_opts.embedding_model, function(vectors, err)
     if cancelled then

@@ -29,12 +29,17 @@ Get concise explanations without leaving your editor.
 -  **Streaming responses** - See answers as they generate
 -  **Concise explanations** - Focuses on the "why", not just the "fix"
 -  **Multiple models** - Switch between Claude, GPT, Gemini, Mercury, and more
+-  **Local models** - Run GGUF models through managed llama.cpp setup
+-  **ChatGPT subscription** - Sign in with ChatGPT and use your plan allowance without an API key
+-  **T3 Code threads** - Send context to an existing T3 thread and mirror its reply in Sage
 
 ## Requirements
 
 - Neovim >= 0.10
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
-- OpenRouter API key (bring your own)
+- Hosted models: an OpenRouter API key, or an eligible ChatGPT subscription
+- ChatGPT sign-in: macOS/Linux, `openssl` on your PATH (for secure sign-in verification), and a browser
+- Optional: `HF_TOKEN` for gated Hugging Face local models
 
 ## Installation
 
@@ -67,7 +72,38 @@ use {
 
 ## Setup
 
-### 1. Get an API Key
+### 1. Connect a Provider
+
+#### Use your ChatGPT subscription
+
+Run `:SageChatGPTLogin`, continue with ChatGPT in your browser, and approve permission to use your plan. After sign-in, choose a model from your account's catalog. Sage selects the ChatGPT provider and saves your choice. Then use `:SageAsk`, `:SageExplain`, `:SageFix`, follow-ups, and `:SageInfill` as usual.
+
+This uses OpenAI's public [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) flow and [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference). Availability and usage are subject to your account, workspace, and plan limits; manage the app's allowance in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). Sage does not fall back to paid API requests when subscription usage fails.
+
+- `:SageChatGPTStatus` shows your connection and selected model.
+- `:SageModel` → **ChatGPT subscription...** refreshes your account's available models.
+- `:SageChatGPTLogout` removes saved tokens and attempts to revoke the renewable session.
+- `:SageChatGPTLogin!` connects another account or workspace. Sage keeps one active connection; an unsuccessful sign-in preserves the previous connection.
+
+No Codex CLI or OpenAI API key is needed. ChatGPT sign-in currently supports macOS/Linux and requires `openssl` on your PATH. On macOS, if it is missing, install it with `brew install openssl` and add its `bin` directory to your PATH.
+
+Credentials are stored separately from your Lua configuration in `stdpath("data")/sage-llm/chatgpt`, using owner-only permissions and atomic writes. Access tokens refresh automatically. Browser sign-in uses PKCE and validates the returned identity; credentials are never read from other apps. Do not commit or share this directory. Subscription requests send the prompt and conversation history with `store = false`; Sage supplies no tools. Repository embeddings/RAG and the OpenRouter web-search toggle are unavailable with this provider.
+
+Optional settings in `:SageConfig` (config-file values take priority over `setup()`):
+
+```lua
+return {
+  provider = "chatgpt",
+  chatgpt = {
+    -- model = "...", -- Account catalog slug; :SageModel saves this for you
+    -- auth_dir = "/private/path/sage-chatgpt", -- Optional credential directory
+    login_timeout_ms = 180000,
+    request_timeout_ms = 30000,
+  },
+}
+```
+
+#### Use OpenRouter
 
 1. Sign up at [OpenRouter](https://openrouter.ai)
 2. Generate an API key
@@ -119,6 +155,8 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | Command | Description |
 |---------|-------------|
 | `:SageAsk` | Open input buffer to ask about visual selection |
+| `:SageT3Ask` | Ask an existing T3 Code thread about the selection |
+| `:SageT3Thread` | Choose a different destination thread for this working directory |
 | `:SageExplain` | Explain what the selected code does |
 | `:SageFix` | Explain how to fix errors/warnings in selection |
 | `:SageInfill` | Generate and preview inline replacement for selection |
@@ -126,8 +164,77 @@ vim.keymap.set("n", "<leader>sm", ":SageModel<CR>", { desc = "Select model" })
 | `:SageModel` | Open model picker to switch LLMs |
 | `:SageModelRemove` | Open model picker to remove a model |
 | `:SageConfig` | Open config file for editing |
+| `:SageChatGPTLogin[!]` | Sign in with ChatGPT; `!` connects another account/workspace |
+| `:SageChatGPTLogout` | Clear saved ChatGPT tokens and revoke the session |
+| `:SageChatGPTStatus` | Show ChatGPT connection status |
 | `:SageDepsOn` | Enable dependency detection (slower, more context) |
 | `:SageDepsOff` | Disable dependency detection (default) |
+| `:SageLocalSetup <model>` | Install/locate llama.cpp, save a local model, and start it |
+| `:SageLocalStart [model]` | Start the configured local llama.cpp server |
+| `:SageLocalStop` | Stop the plugin-owned local llama.cpp server |
+| `:SageLocalStatus` | Show local llama.cpp server status and log path |
+| `:SageLocalInstall` | Install or locate `llama-server` |
+
+### Ask a T3 Code thread
+
+Use this when you edit in Neovim and want to continue a conversation in T3 Code:
+
+1. Run T3 Code on the same machine as Neovim, add your project, and open a thread.
+2. Highlight code in Neovim and run `:SageT3Ask`.
+3. Choose the destination thread, enter your question, and submit with `<CR>`.
+4. Watch the reply in Sage's response window. Press `f` to follow up in the same
+   T3 thread, `y` to yank, or `q` to hide; `:SageView` reopens the saved response.
+
+Sage remembers your choice for the current Neovim session and working directory.
+Use `:SageT3Thread` to change it. The picker shows open, unsettled threads in the
+matching T3 project, with titles, status and IDs; it does not automatically select
+the thread focused in the T3 window. A busy thread gets the message as its next turn.
+Sage mirrors incremental reply snapshots as T3 publishes them, then replaces the
+preview with the final answer for your submitted turn. The CLI supplies snapshots
+rather than token events, so updates arrive on a short polling interval. Other
+messages in the thread are excluded. The conversation also remains available in T3.
+
+`q`, `<Esc>` and `<C-c>` stop Sage's local reply reader; the remote T3 turn keeps
+running. Reopening with `:SageView` shows the saved text. Approvals and questions
+from the agent must be answered in T3 Code; when the CLI reports that it needs
+input, Sage stops its reader and displays that status. Changing `:SageT3Thread` affects new
+selection questions; `f` continues the thread displayed in the response window.
+
+The message includes the working directory, absolute source path and selected line
+range, filetype, extracted text (including unsaved edits), and LSP diagnostics in
+that range. Dependency context follows `:SageDepsOn` / `:SageDepsOff`. Context is
+captured before the picker/input opens. T3 uses the destination thread's existing
+model, instructions and permissions. This command does not require a Sage API key
+or change the provider used by `:SageAsk`.
+
+**Requires T3 Code v0.1.2 or newer**, with `t3 thread list`, `send --wait`, and `show`.
+Check `t3 --help` for the `thread` subcommand; older desktop builds may include a
+`t3` launcher without these commands and need an update. This integration uses
+T3's documented [host scripting interface](https://github.com/pingdotgg/t3code/blob/main/docs/user/outside-agents.md#scripts-on-the-host).
+If `t3` is not on your PATH, Sage also checks `~/.t3/bin/t3`.
+
+Optional configuration in `setup()` (also accepted in the Sage config file):
+
+```lua
+require("sage-llm").setup({
+  t3 = {
+    command = "t3",        -- Executable path; no shell arguments
+    -- base_dir = "~/.t3", -- Custom T3 data directory; otherwise honors T3CODE_HOME
+    -- project = "id",     -- T3 project ID or path; defaults to Neovim's cwd
+    timeout_ms = 15000,          -- Timeout for each listing/snapshot read
+    response_timeout_ms = 600000, -- Maximum wait for a queued/running reply
+    poll_interval_ms = 500,       -- Delay between reply snapshot reads
+  },
+})
+
+vim.keymap.set("v", "<leader>st", ":SageT3Ask<CR>", { desc = "Ask T3 about selection" })
+vim.keymap.set("n", "<leader>sT", ":SageT3Thread<CR>", { desc = "Select T3 thread" })
+```
+
+The Lua API is `require("sage-llm").t3_ask()` and
+`require("sage-llm").t3_select_thread()`. Sage invokes the CLI asynchronously and
+sends context through stdin. If the reply cannot be confirmed, inspect the thread
+before retrying because the message may already have arrived and may still be running.
 
 ### Input Window
 
@@ -275,6 +382,72 @@ Notes:
 - The index is cached under `stdpath("cache") .. "/sage-llm/rag"`
 - Larger repositories may take longer on the first ask with RAG enabled while index chunks are embedded
 - Retrieved snippets are sent to the model as additional prompt context (review for privacy-sensitive repos)
+
+## Local Models
+
+Local chat and infill are supported through [llama.cpp](https://github.com/ggml-org/llama.cpp) and `llama-server`. Local embeddings/RAG are not supported yet; when the local provider is active, RAG is skipped.
+
+The common setup path only needs a llama.cpp-compatible Hugging Face GGUF model string:
+
+```vim
+:SageLocalSetup owner/model-GGUF:Q4_K_M
+```
+
+This will:
+- Find `llama-server` from config, managed install cache, or `$PATH`
+- Download an official llama.cpp release binary when possible
+- Save the model to `~/.config/sage-llm/config.lua`
+- Switch `provider` to `llama_cpp`
+- Start `llama-server` on `127.0.0.1`
+- Let llama.cpp download/cache the Hugging Face model
+- Wait until `/v1/health` reports ready
+
+For gated or private Hugging Face models, set `HF_TOKEN` in your shell before starting Neovim:
+
+```sh
+export HF_TOKEN="hf_..."
+```
+
+Do not put Hugging Face tokens in `~/.config/sage-llm/config.lua`. The plugin does not persist `HF_TOKEN` or pass it on the command line.
+
+Example persisted config:
+
+```lua
+return {
+  provider = "llama_cpp",
+  model = "owner/model-GGUF:Q4_K_M",
+  llama_cpp = {
+    auto_install = true,
+    auto_start = true,
+    host = "127.0.0.1",
+    port = "auto",
+    models = {
+      {
+        name = "owner/model-GGUF:Q4_K_M",
+        hf_repo = "owner/model-GGUF:Q4_K_M",
+        ctx_size = 8192,
+        gpu_layers = "auto",
+      },
+    },
+  },
+}
+```
+
+Useful commands:
+- `:SageLocalStatus` shows the active model, server URL, ownership, and log path
+- `:SageLocalStop` stops only a server started by sage-llm
+- `:SageModel` can switch between OpenRouter and configured local models
+
+If auto-install is not available for your platform, install `llama-server` manually and set:
+
+```lua
+return {
+  provider = "llama_cpp",
+  llama_cpp = {
+    binary = "/path/to/llama-server",
+  },
+}
+```
 
 ## Available Models
 

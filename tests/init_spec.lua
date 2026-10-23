@@ -249,7 +249,9 @@ describe("init conversation view", function()
     })
     stub_module("sage-llm.ui", {
       response = {
-        open = function(_) return true end,
+        open = function(_)
+          return true
+        end,
         show_loading = function() end,
         start_streaming = function() end,
         append_token = function(_) end,

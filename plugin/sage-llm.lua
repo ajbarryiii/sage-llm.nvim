@@ -14,6 +14,19 @@ end
 
 -- Create user commands
 local function create_commands()
+  vim.api.nvim_create_user_command("SageT3Ask", function()
+    require("sage-llm").t3_ask()
+  end, {
+    range = true,
+    desc = "Ask an existing T3 Code thread about visual selection",
+  })
+
+  vim.api.nvim_create_user_command("SageT3Thread", function()
+    require("sage-llm").t3_select_thread()
+  end, {
+    desc = "Select the T3 Code thread that receives Sage questions",
+  })
+
   -- :SageAsk - Open input to ask about visual selection
   vim.api.nvim_create_user_command("SageAsk", function()
     require("sage-llm").ask()
@@ -86,6 +99,57 @@ local function create_commands()
     require("sage-llm").edit_config()
   end, {
     desc = "Edit sage-llm config file",
+  })
+
+  vim.api.nvim_create_user_command("SageChatGPTLogin", function(opts)
+    require("sage-llm").chatgpt_login(opts.bang)
+  end, {
+    bang = true,
+    desc = "Continue with ChatGPT to use your subscription",
+  })
+
+  vim.api.nvim_create_user_command("SageChatGPTLogout", function()
+    require("sage-llm").chatgpt_logout()
+  end, {
+    desc = "Remove Sage's saved ChatGPT credentials",
+  })
+
+  vim.api.nvim_create_user_command("SageChatGPTStatus", function()
+    require("sage-llm").chatgpt_status()
+  end, {
+    desc = "Show ChatGPT subscription connection status",
+  })
+
+  vim.api.nvim_create_user_command("SageLocalSetup", function(opts)
+    require("sage-llm").local_setup(opts.args)
+  end, {
+    nargs = 1,
+    desc = "Set up and start a local llama.cpp model",
+  })
+
+  vim.api.nvim_create_user_command("SageLocalStart", function(opts)
+    require("sage-llm").local_start(opts.args)
+  end, {
+    nargs = "?",
+    desc = "Start the configured local llama.cpp server",
+  })
+
+  vim.api.nvim_create_user_command("SageLocalStop", function()
+    require("sage-llm").local_stop()
+  end, {
+    desc = "Stop the plugin-owned local llama.cpp server",
+  })
+
+  vim.api.nvim_create_user_command("SageLocalStatus", function()
+    require("sage-llm").local_status()
+  end, {
+    desc = "Show local llama.cpp server status",
+  })
+
+  vim.api.nvim_create_user_command("SageLocalInstall", function()
+    require("sage-llm").local_install()
+  end, {
+    desc = "Install or locate llama-server for local models",
   })
 end
 

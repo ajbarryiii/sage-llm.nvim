@@ -35,7 +35,7 @@ function M.retrieve_context(opts, on_complete)
   end
 
   local cancelled = false
-  local active_handle = nil
+  local active_handle
 
   active_handle = rag_index.ensure_index(opts.bufnr, rag_opts, function(index, index_err)
     if cancelled then

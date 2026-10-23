@@ -27,12 +27,11 @@ local function format_rag_context(snippets)
   return table.concat(lines, "\n")
 end
 
----Build the user message content from selection and context
+---Build selection context shared by Sage requests and external handoffs.
 ---@param selection SageSelection
----@param question string User's question
 ---@param opts SagePromptBuildOpts|nil
 ---@return string
-function M.build_user_message(selection, question, opts)
+function M.build_selection_context(selection, opts)
   local parts = {}
 
   -- File info
@@ -69,11 +68,16 @@ function M.build_user_message(selection, question, opts)
     table.insert(parts, rag_context)
   end
 
-  -- Question
-  table.insert(parts, "")
-  table.insert(parts, "Question: " .. question)
-
   return table.concat(parts, "\n")
+end
+
+---Build the user message content from selection and context
+---@param selection SageSelection
+---@param question string User's question
+---@param opts SagePromptBuildOpts|nil
+---@return string
+function M.build_user_message(selection, question, opts)
+  return M.build_selection_context(selection, opts) .. "\n\nQuestion: " .. question
 end
 
 ---Build the complete messages array for the API

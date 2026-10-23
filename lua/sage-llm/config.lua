@@ -1,7 +1,11 @@
 ---@class SageConfig
+---@field provider string LLM provider: "openrouter", "llama_cpp", or "chatgpt"
 ---@field api_key string|nil API key for OpenRouter (falls back to $OPENROUTER_API_KEY)
 ---@field model string Default model to use
 ---@field base_url string OpenRouter API base URL
+---@field llama_cpp SageLlamaCppConfig Local llama.cpp configuration
+---@field chatgpt SageChatGPTConfig ChatGPT subscription configuration
+---@field t3 SageT3Config T3 Code thread handoff configuration
 ---@field response SageResponseConfig Response window configuration
 ---@field input SageInputConfig Input window configuration
 ---@field detect_dependencies boolean Whether to detect and include dependencies
@@ -38,15 +42,81 @@
 ---@field exclude string[] Glob patterns for files to exclude from index
 ---@field index_dir string|nil Optional custom directory for persisted index cache
 
+---@class SageLlamaCppConfig
+---@field auto_install boolean Download llama-server when missing
+---@field auto_start boolean Start llama-server automatically for local requests
+---@field binary string|nil Path to llama-server. Falls back to managed install or $PATH
+---@field install_dir string|nil Directory for managed llama.cpp installs
+---@field release_tag string Release tag to install, or "latest"
+---@field host string Host to bind/connect to
+---@field port number|string Port number or "auto"
+---@field startup_timeout_ms number Timeout waiting for server readiness
+---@field health_check_interval_ms number Poll interval while waiting for readiness
+---@field stop_on_exit boolean Stop plugin-owned server on VimLeavePre
+---@field ctx_size number Default context size for local models
+---@field gpu_layers number|string Default GPU layers for local models
+---@field threads number|nil Default CPU threads for local models
+---@field extra_args string[] Extra llama-server args
+---@field models table[] Local model entries
+
+---@class SageChatGPTConfig
+---@field model string|nil Model slug from the authenticated ChatGPT catalog
+---@field auth_dir string|nil Custom directory for private subscription credentials
+---@field login_timeout_ms number Timeout waiting for browser login
+---@field request_timeout_ms number Timeout for subscription HTTP requests
+
+---@class SageT3Config
+---@field command string Path to the T3 CLI executable
+---@field base_dir string|nil T3 data directory (otherwise T3CODE_HOME or the CLI default)
+---@field project string|nil T3 project id or path (otherwise Neovim's working directory)
+---@field timeout_ms number Timeout for listing threads or reading reply snapshots
+---@field response_timeout_ms number Maximum wait for a queued or running T3 reply
+---@field poll_interval_ms number Delay between reads of incremental T3 reply snapshots
+
 local config_file = require("sage-llm.config_file")
 
 local M = {}
 
 ---@type SageConfig
 M.defaults = {
+  provider = "openrouter",
   api_key = nil,
   model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
+
+  t3 = {
+    command = "t3",
+    base_dir = nil,
+    project = nil,
+    timeout_ms = 15000,
+    response_timeout_ms = 600000,
+    poll_interval_ms = 500,
+  },
+
+  chatgpt = {
+    model = nil,
+    auth_dir = nil,
+    login_timeout_ms = 180000,
+    request_timeout_ms = 30000,
+  },
+
+  llama_cpp = {
+    auto_install = true,
+    auto_start = true,
+    binary = nil,
+    install_dir = nil,
+    release_tag = "latest",
+    host = "127.0.0.1",
+    port = "auto",
+    startup_timeout_ms = 300000,
+    health_check_interval_ms = 500,
+    stop_on_exit = true,
+    ctx_size = 8192,
+    gpu_layers = "auto",
+    threads = nil,
+    extra_args = {},
+    models = {},
+  },
 
   response = {
     width = 0.6,
@@ -170,6 +240,19 @@ Rules:
 ---@type SageConfig
 M.options = vim.deepcopy(M.defaults)
 
+-- The subscription model is stored separately; remember other provider choices
+-- when switching within this Neovim session.
+local provider_models = { openrouter = M.defaults.model }
+
+local function first_local_model()
+  local model = M.options.llama_cpp.models[1]
+  return model and (model.name or model.hf_repo or model.model_path) or "llama.cpp"
+end
+
+local function valid_provider(provider)
+  return provider == "openrouter" or provider == "llama_cpp" or provider == "chatgpt"
+end
+
 ---Merge user options with defaults
 ---Priority: config file > setup() opts > env var > defaults
 ---@param opts SageConfig|nil
@@ -195,7 +278,7 @@ function M.setup(opts)
       vim.notify_once(
         "sage-llm: Created config file at "
           .. config_file.get_config_path()
-          .. "\nEdit it to add your API key.",
+          .. "\nUse :SageChatGPTLogin for a subscription, or set $OPENROUTER_API_KEY.",
         vim.log.levels.INFO
       )
     elseif create_err then
@@ -207,17 +290,61 @@ function M.setup(opts)
 
   -- Validate required fields
   M.validate()
+
+  provider_models = {
+    openrouter = base.provider == "llama_cpp" and (base.models[1] or M.defaults.model)
+      or base.model,
+    llama_cpp = base.provider == "llama_cpp" and base.model or first_local_model(),
+  }
+  if M.is_chatgpt_provider() then
+    M.options.model = M.options.chatgpt.model or "ChatGPT"
+  end
 end
 
 ---Validate configuration
 function M.validate()
+  if type(M.options.t3) ~= "table" then
+    error("sage-llm: t3 config must be a table")
+  end
+
   if type(M.options.rag) ~= "table" then
     error("sage-llm: rag config must be a table")
   end
 
+  if type(M.options.llama_cpp) ~= "table" then
+    error("sage-llm: llama_cpp config must be a table")
+  end
+
+  if type(M.options.chatgpt) ~= "table" then
+    error("sage-llm: chatgpt config must be a table")
+  end
+
   vim.validate({
+    ["t3.command"] = { M.options.t3.command, "string" },
+    ["t3.base_dir"] = { M.options.t3.base_dir, "string", true },
+    ["t3.project"] = { M.options.t3.project, "string", true },
+    ["t3.timeout_ms"] = { M.options.t3.timeout_ms, "number" },
+    ["t3.response_timeout_ms"] = { M.options.t3.response_timeout_ms, "number" },
+    ["t3.poll_interval_ms"] = { M.options.t3.poll_interval_ms, "number" },
+    provider = { M.options.provider, "string" },
     model = { M.options.model, "string" },
     base_url = { M.options.base_url, "string" },
+    ["chatgpt.model"] = { M.options.chatgpt.model, "string", true },
+    ["chatgpt.auth_dir"] = { M.options.chatgpt.auth_dir, "string", true },
+    ["chatgpt.login_timeout_ms"] = { M.options.chatgpt.login_timeout_ms, "number" },
+    ["chatgpt.request_timeout_ms"] = { M.options.chatgpt.request_timeout_ms, "number" },
+    ["llama_cpp.auto_install"] = { M.options.llama_cpp.auto_install, "boolean" },
+    ["llama_cpp.auto_start"] = { M.options.llama_cpp.auto_start, "boolean" },
+    ["llama_cpp.host"] = { M.options.llama_cpp.host, "string" },
+    ["llama_cpp.startup_timeout_ms"] = { M.options.llama_cpp.startup_timeout_ms, "number" },
+    ["llama_cpp.health_check_interval_ms"] = {
+      M.options.llama_cpp.health_check_interval_ms,
+      "number",
+    },
+    ["llama_cpp.stop_on_exit"] = { M.options.llama_cpp.stop_on_exit, "boolean" },
+    ["llama_cpp.ctx_size"] = { M.options.llama_cpp.ctx_size, "number" },
+    ["llama_cpp.extra_args"] = { M.options.llama_cpp.extra_args, "table" },
+    ["llama_cpp.models"] = { M.options.llama_cpp.models, "table" },
     ["response.width"] = { M.options.response.width, "number" },
     ["response.height"] = { M.options.response.height, "number" },
     ["input.width"] = { M.options.input.width, "number" },
@@ -241,6 +368,55 @@ function M.validate()
     system_prompt_no_selection = { M.options.system_prompt_no_selection, "string" },
     system_prompt_infill = { M.options.system_prompt_infill, "string" },
   })
+
+  if not valid_provider(M.options.provider) then
+    error("sage-llm: provider must be 'openrouter', 'llama_cpp', or 'chatgpt'")
+  end
+
+  for _, key in ipairs({ "command", "base_dir", "project" }) do
+    local value = M.options.t3[key]
+    if value and vim.trim(value) == "" then
+      error("sage-llm: t3." .. key .. " must not be empty")
+    end
+  end
+  for _, key in ipairs({ "timeout_ms", "response_timeout_ms", "poll_interval_ms" }) do
+    local value = M.options.t3[key]
+    if value < 1 or value == math.huge or value ~= math.floor(value) then
+      error("sage-llm: t3." .. key .. " must be a positive finite integer")
+    end
+  end
+
+  for _, key in ipairs({ "login_timeout_ms", "request_timeout_ms" }) do
+    local value = M.options.chatgpt[key]
+    if value < 1 or value == math.huge or value ~= math.floor(value) then
+      error("sage-llm: chatgpt." .. key .. " must be a positive finite integer")
+    end
+  end
+
+  local port = M.options.llama_cpp.port
+  if port ~= "auto" then
+    local n = tonumber(port)
+    if not n or n < 1 or n > 65535 then
+      error("sage-llm: llama_cpp.port must be 'auto' or a valid TCP port")
+    end
+  end
+
+  if M.options.llama_cpp.startup_timeout_ms < 1 then
+    error("sage-llm: llama_cpp.startup_timeout_ms must be >= 1")
+  end
+
+  if M.options.llama_cpp.health_check_interval_ms < 1 then
+    error("sage-llm: llama_cpp.health_check_interval_ms must be >= 1")
+  end
+
+  for _, model in ipairs(M.options.llama_cpp.models) do
+    if type(model) ~= "table" then
+      error("sage-llm: llama_cpp.models entries must be tables")
+    end
+    if not model.hf_repo and not model.model_path then
+      error("sage-llm: llama_cpp model entries must define hf_repo or model_path")
+    end
+  end
 
   if M.options.rag.chunk_overlap >= M.options.rag.chunk_lines then
     error("sage-llm: rag.chunk_overlap must be smaller than rag.chunk_lines")
@@ -281,6 +457,102 @@ function M.get_api_key()
   return M.options.api_key or vim.env.OPENROUTER_API_KEY
 end
 
+---@return boolean
+function M.is_local_provider()
+  return M.options.provider == "llama_cpp"
+end
+
+---@return boolean
+function M.is_chatgpt_provider()
+  return M.options.provider == "chatgpt"
+end
+
+---@return boolean
+function M.supports_search()
+  return M.options.provider == "openrouter"
+end
+
+---@return boolean
+function M.supports_rag()
+  return M.options.provider == "openrouter"
+end
+
+---@param provider string
+---@param persist boolean|nil Whether to persist to config file (default: true)
+function M.set_provider(provider, persist)
+  vim.validate({ provider = { provider, "string" } })
+  if not valid_provider(provider) then
+    error("sage-llm: provider must be 'openrouter', 'llama_cpp', or 'chatgpt'")
+  end
+
+  if not M.is_chatgpt_provider() then
+    provider_models[M.options.provider] = M.options.model
+  end
+  M.options.provider = provider
+  if M.is_chatgpt_provider() then
+    M.options.model = M.options.chatgpt.model or "ChatGPT"
+  else
+    M.options.model = provider_models[provider]
+      or (provider == "llama_cpp" and first_local_model() or M.defaults.model)
+  end
+
+  if persist ~= false then
+    local ok, err = config_file.update("provider", provider)
+    if not ok and err then
+      vim.notify_once("sage-llm: Failed to save provider: " .. err, vim.log.levels.WARN)
+    end
+  end
+end
+
+---@param name string|nil
+---@return table|nil
+function M.get_llama_cpp_model(name)
+  local target = name or M.options.model
+  for _, model in ipairs(M.options.llama_cpp.models or {}) do
+    if model.name == target or model.hf_repo == target or model.model_path == target then
+      return model
+    end
+  end
+  return nil
+end
+
+---@param entry table
+---@param persist boolean|nil Whether to persist to config file (default: true)
+function M.add_llama_cpp_model(entry, persist)
+  if type(entry) ~= "table" then
+    error("sage-llm: local model entry must be a table")
+  end
+
+  local name = entry.name or entry.hf_repo or entry.model_path
+  if not name or name == "" then
+    error("sage-llm: local model entry must have a name, hf_repo, or model_path")
+  end
+
+  entry.name = name
+  local models = M.options.llama_cpp.models
+  for i, model in ipairs(models) do
+    if model.name == name or (entry.hf_repo and model.hf_repo == entry.hf_repo) then
+      models[i] = vim.tbl_deep_extend("force", model, entry)
+      if persist ~= false then
+        local ok, err = config_file.update("llama_cpp", M.options.llama_cpp)
+        if not ok and err then
+          vim.notify_once("sage-llm: Failed to save local models: " .. err, vim.log.levels.WARN)
+        end
+      end
+      return models[i]
+    end
+  end
+
+  table.insert(models, entry)
+  if persist ~= false then
+    local ok, err = config_file.update("llama_cpp", M.options.llama_cpp)
+    if not ok and err then
+      vim.notify_once("sage-llm: Failed to save local models: " .. err, vim.log.levels.WARN)
+    end
+  end
+  return entry
+end
+
 ---Set dependency detection on/off
 ---@param enabled boolean
 function M.set_detect_dependencies(enabled)
@@ -297,11 +569,20 @@ end
 ---@param model string
 ---@param persist boolean|nil Whether to persist to config file (default: true)
 function M.set_model(model, persist)
+  vim.validate({ model = { model, "string" } })
   M.options.model = model
+
+  local key, value = "model", model
+  if M.is_chatgpt_provider() then
+    M.options.chatgpt.model = model
+    key, value = "chatgpt", M.options.chatgpt
+  else
+    provider_models[M.options.provider] = model
+  end
 
   -- Persist to config file by default
   if persist ~= false then
-    local ok, err = config_file.update("model", model)
+    local ok, err = config_file.update(key, value)
     if not ok and err then
       vim.notify_once("sage-llm: Failed to save model: " .. err, vim.log.levels.WARN)
     end
@@ -353,8 +634,11 @@ function M.remove_model(model, persist)
 
   table.remove(M.options.models, idx)
 
-  if M.options.model == model then
-    M.options.model = M.options.models[1]
+  if provider_models.openrouter == model then
+    provider_models.openrouter = M.options.models[1]
+    if M.options.provider == "openrouter" then
+      M.options.model = provider_models.openrouter
+    end
   end
 
   -- Persist to config file by default
@@ -364,7 +648,8 @@ function M.remove_model(model, persist)
       vim.notify_once("sage-llm: Failed to save models: " .. models_err, vim.log.levels.WARN)
     end
 
-    local model_ok, model_err = config_file.update("model", M.options.model)
+    local saved_model = M.is_chatgpt_provider() and provider_models.openrouter or M.options.model
+    local model_ok, model_err = config_file.update("model", saved_model)
     if not model_ok and model_err then
       vim.notify_once("sage-llm: Failed to save model: " .. model_err, vim.log.levels.WARN)
     end

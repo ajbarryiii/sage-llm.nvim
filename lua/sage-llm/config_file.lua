@@ -7,14 +7,19 @@ local M = {}
 local TEMPLATE = [[
 -- sage-llm.nvim configuration
 -- This file is loaded automatically by sage-llm.nvim
--- Keep your API key here instead of in your Neovim config
+-- For OpenRouter, set OPENROUTER_API_KEY in your shell environment.
+-- ChatGPT subscription login is available through :SageChatGPTLogin.
+-- Subscription credentials are stored privately outside this configuration.
+-- For gated Hugging Face local models, set HF_TOKEN in your shell environment.
+-- Do not store Hugging Face tokens in this file.
 
 return {
-  -- Your OpenRouter API key (required)
+  -- Optional OpenRouter API key (prefer OPENROUTER_API_KEY):
   -- Get one at: https://openrouter.ai/keys
-  api_key = "your-api-key-here",
+  -- api_key = "your-api-key-here",
 
   -- Uncomment to override defaults:
+  -- provider = "openrouter", -- "openrouter", "llama_cpp", or "chatgpt"
   -- model = "google/gemini-3.8-flash",
   -- detect_dependencies = false,
   -- rag = {
@@ -32,6 +37,32 @@ return {
   --   width = 0.5,
   --   height = 5,
   --   border = "rounded",
+  -- },
+  --
+  -- ChatGPT subscription example (sign in with :SageChatGPTLogin):
+  -- provider = "chatgpt",
+  -- chatgpt = {
+  --   -- Select an available model using :SageModel after signing in.
+  --   login_timeout_ms = 180000,
+  --   request_timeout_ms = 30000,
+  -- },
+  --
+  -- Local llama.cpp example:
+  -- provider = "llama_cpp",
+  -- model = "owner/model-GGUF:Q4_K_M",
+  -- llama_cpp = {
+  --   auto_install = true,
+  --   auto_start = true,
+  --   host = "127.0.0.1",
+  --   port = "auto",
+  --   models = {
+  --     {
+  --       name = "owner/model-GGUF:Q4_K_M",
+  --       hf_repo = "owner/model-GGUF:Q4_K_M",
+  --       ctx_size = 8192,
+  --       gpu_layers = "auto",
+  --     },
+  --   },
   -- },
 }
 ]]

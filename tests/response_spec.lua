@@ -52,4 +52,63 @@ describe("response window hide behavior", function()
 
     assert.same({ "Header", "", "Response line 1", "" }, lines)
   end)
+
+  it("replaces progressive reply snapshots while preserving the header", function()
+    response.open("Header")
+    response.show_loading()
+    response.start_streaming()
+    response.set_response_text("Draft")
+    response.set_response_text("Revised\nanswer λ")
+    response.complete()
+    assert.same(
+      { "Header", "", "Revised", "answer λ", "" },
+      vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    )
+  end)
+
+  it("preserves earlier answers when replacing a follow-up response", function()
+    response.open("Header\n")
+    response.set_response_text("First answer")
+    response.complete()
+    response.append_followup_header("Follow-up:\n")
+    response.show_loading()
+    response.start_streaming()
+    response.set_response_text("Draft")
+    response.set_response_text("Second answer")
+    response.complete()
+    assert.same(
+      { "Header", "", "First answer", "", "Follow-up:", "", "Second answer", "" },
+      vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    )
+  end)
+
+  it("keeps an explicit T3 title when the window is hidden and reopened", function()
+    response.open("Header", { title = "T3: Investigate ownership" })
+    response.hide()
+    assert.is_true(response.show())
+    local title = vim.api.nvim_win_get_config(vim.api.nvim_get_current_win()).title
+    assert.truthy(vim.inspect(title):find("T3: Investigate ownership", 1, true))
+  end)
+
+  it("removes the search keymap and footer when the provider lacks search", function()
+    response.open("Header")
+    response.set_on_toggle_search(function()
+      return true
+    end)
+    local bufnr = vim.api.nvim_get_current_buf()
+    local winid = vim.api.nvim_get_current_win()
+    local function has_search_keymap()
+      for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+        if keymap.lhs == "S" then
+          return true
+        end
+      end
+      return false
+    end
+    assert.is_true(has_search_keymap())
+    response.set_on_toggle_search(nil)
+    assert.is_false(has_search_keymap())
+    local footer = vim.api.nvim_win_get_config(winid).footer
+    assert.is_nil(vim.inspect(footer):find("search:", 1, true))
+  end)
 end)

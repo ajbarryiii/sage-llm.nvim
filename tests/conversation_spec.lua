@@ -14,6 +14,19 @@ describe("conversation", function()
   end)
 
   describe("start", function()
+    it("tracks the reply backend and resets it for a new API conversation", function()
+      conversation.start({ { role = "user", content = "q" } }, { backend = "t3" })
+      assert.equals("t3", conversation.get_backend())
+      conversation.start({ { role = "user", content = "next" } })
+      assert.equals("api", conversation.get_backend())
+    end)
+
+    it("clears the reply backend on reset", function()
+      conversation.start({}, { backend = "t3" })
+      conversation.reset()
+      assert.equals("api", conversation.get_backend())
+    end)
+
     it("activates the conversation", function()
       conversation.start({
         { role = "system", content = "You are helpful." },
@@ -134,6 +147,25 @@ describe("conversation", function()
       conversation.finish_response()
       assert.equals(3, conversation.turn_count())
     end)
+  end)
+
+  it("discards a partial answer before retrying a failed follow-up", function()
+    conversation.start({
+      { role = "user", content = "initial" },
+    })
+    conversation.accumulate_token("complete answer")
+    conversation.finish_response()
+    conversation.add_followup("failed follow-up")
+    conversation.accumulate_token("partial answer before quota failure")
+    conversation.discard_response()
+    conversation.remove_last_user_message()
+    conversation.add_followup("retry")
+    conversation.accumulate_token("successful retry")
+    assert.equals("\nsuccessful retry", conversation.finish_response())
+    local messages = conversation.add_followup("next")
+    assert.equals(5, #messages)
+    assert.equals("\nsuccessful retry", messages[4].content)
+    assert.equals(2, conversation.turn_count())
   end)
 
   describe("remove_last_user_message", function()
