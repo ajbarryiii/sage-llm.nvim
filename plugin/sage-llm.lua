@@ -14,6 +14,19 @@ end
 
 -- Create user commands
 local function create_commands()
+  vim.api.nvim_create_user_command("SageT3Ask", function()
+    require("sage-llm").t3_ask()
+  end, {
+    range = true,
+    desc = "Ask an existing T3 Code thread about visual selection",
+  })
+
+  vim.api.nvim_create_user_command("SageT3Thread", function()
+    require("sage-llm").t3_select_thread()
+  end, {
+    desc = "Select the T3 Code thread that receives Sage questions",
+  })
+
   -- :SageAsk - Open input to ask about visual selection
   vim.api.nvim_create_user_command("SageAsk", function()
     require("sage-llm").ask()

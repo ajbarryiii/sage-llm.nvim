@@ -53,6 +53,43 @@ describe("response window hide behavior", function()
     assert.same({ "Header", "", "Response line 1", "" }, lines)
   end)
 
+  it("replaces progressive reply snapshots while preserving the header", function()
+    response.open("Header")
+    response.show_loading()
+    response.start_streaming()
+    response.set_response_text("Draft")
+    response.set_response_text("Revised\nanswer λ")
+    response.complete()
+    assert.same(
+      { "Header", "", "Revised", "answer λ", "" },
+      vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    )
+  end)
+
+  it("preserves earlier answers when replacing a follow-up response", function()
+    response.open("Header\n")
+    response.set_response_text("First answer")
+    response.complete()
+    response.append_followup_header("Follow-up:\n")
+    response.show_loading()
+    response.start_streaming()
+    response.set_response_text("Draft")
+    response.set_response_text("Second answer")
+    response.complete()
+    assert.same(
+      { "Header", "", "First answer", "", "Follow-up:", "", "Second answer", "" },
+      vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    )
+  end)
+
+  it("keeps an explicit T3 title when the window is hidden and reopened", function()
+    response.open("Header", { title = "T3: Investigate ownership" })
+    response.hide()
+    assert.is_true(response.show())
+    local title = vim.api.nvim_win_get_config(vim.api.nvim_get_current_win()).title
+    assert.truthy(vim.inspect(title):find("T3: Investigate ownership", 1, true))
+  end)
+
   it("cancels the displayed request by its original provider after a switch", function()
     response.open("Header")
     response.show_loading()

@@ -4,6 +4,7 @@
 ---@field model string Default model to use
 ---@field base_url string OpenRouter API base URL
 ---@field chatgpt SageChatGPTConfig ChatGPT subscription configuration
+---@field t3 SageT3Config T3 Code thread handoff configuration
 ---@field response SageResponseConfig Response window configuration
 ---@field input SageInputConfig Input window configuration
 ---@field detect_dependencies boolean Whether to detect and include dependencies
@@ -46,6 +47,14 @@
 ---@field login_timeout_ms number Timeout waiting for browser login
 ---@field request_timeout_ms number Timeout for subscription HTTP requests
 
+---@class SageT3Config
+---@field command string Path to the T3 CLI executable
+---@field base_dir string|nil T3 data directory (otherwise T3CODE_HOME or the CLI default)
+---@field project string|nil T3 project id or path (otherwise Neovim's working directory)
+---@field timeout_ms number Timeout for listing threads or reading reply snapshots
+---@field response_timeout_ms number Maximum wait for a queued or running T3 reply
+---@field poll_interval_ms number Delay between reads of incremental T3 reply snapshots
+
 local config_file = require("sage-llm.config_file")
 
 local M = {}
@@ -56,6 +65,15 @@ M.defaults = {
   api_key = nil,
   model = "openai/gpt-oss-20b",
   base_url = "https://openrouter.ai/api/v1",
+
+  t3 = {
+    command = "t3",
+    base_dir = nil,
+    project = nil,
+    timeout_ms = 15000,
+    response_timeout_ms = 600000,
+    poll_interval_ms = 500,
+  },
 
   chatgpt = {
     model = nil,
@@ -240,6 +258,10 @@ end
 
 ---Validate configuration
 function M.validate()
+  if type(M.options.t3) ~= "table" then
+    error("sage-llm: t3 config must be a table")
+  end
+
   if type(M.options.rag) ~= "table" then
     error("sage-llm: rag config must be a table")
   end
@@ -249,6 +271,12 @@ function M.validate()
   end
 
   vim.validate({
+    ["t3.command"] = { M.options.t3.command, "string" },
+    ["t3.base_dir"] = { M.options.t3.base_dir, "string", true },
+    ["t3.project"] = { M.options.t3.project, "string", true },
+    ["t3.timeout_ms"] = { M.options.t3.timeout_ms, "number" },
+    ["t3.response_timeout_ms"] = { M.options.t3.response_timeout_ms, "number" },
+    ["t3.poll_interval_ms"] = { M.options.t3.poll_interval_ms, "number" },
     provider = { M.options.provider, "string" },
     model = { M.options.model, "string" },
     base_url = { M.options.base_url, "string" },
@@ -282,6 +310,19 @@ function M.validate()
 
   if not valid_provider(M.options.provider) then
     error("sage-llm: provider must be 'openrouter' or 'chatgpt'")
+  end
+
+  for _, key in ipairs({ "command", "base_dir", "project" }) do
+    local value = M.options.t3[key]
+    if value and vim.trim(value) == "" then
+      error("sage-llm: t3." .. key .. " must not be empty")
+    end
+  end
+  for _, key in ipairs({ "timeout_ms", "response_timeout_ms", "poll_interval_ms" }) do
+    local value = M.options.t3[key]
+    if value < 1 or value == math.huge or value ~= math.floor(value) then
+      error("sage-llm: t3." .. key .. " must be a positive finite integer")
+    end
   end
 
   for _, key in ipairs({ "login_timeout_ms", "request_timeout_ms" }) do

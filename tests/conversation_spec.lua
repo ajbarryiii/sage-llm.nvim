@@ -14,6 +14,19 @@ describe("conversation", function()
   end)
 
   describe("start", function()
+    it("tracks the reply backend and resets it for a new API conversation", function()
+      conversation.start({ { role = "user", content = "q" } }, { backend = "t3" })
+      assert.equals("t3", conversation.get_backend())
+      conversation.start({ { role = "user", content = "next" } })
+      assert.equals("api", conversation.get_backend())
+    end)
+
+    it("clears the reply backend on reset", function()
+      conversation.start({}, { backend = "t3" })
+      conversation.reset()
+      assert.equals("api", conversation.get_backend())
+    end)
+
     it("activates the conversation", function()
       conversation.start({
         { role = "system", content = "You are helpful." },

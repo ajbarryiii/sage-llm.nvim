@@ -16,6 +16,7 @@ local M = {}
 ---@field on_reject_edit function|nil Callback invoked when user presses 'r'
 ---@field edit_pending boolean Whether an inline edit is waiting for accept/reject
 ---@field awaiting_response_text boolean Whether next token should be separated
+---@field title string|nil Explicit title for an externally owned conversation
 
 ---@type SageResponseState
 local state = {
@@ -104,7 +105,7 @@ local function open_window(bufnr)
     col = col,
     style = "minimal",
     border = ui_config.border,
-    title = " sage-llm (" .. model_name .. ") ",
+    title = " sage-llm (" .. (state.title or model_name) .. ") ",
     title_pos = "center",
     footer = footer_text(),
     footer_pos = "center",
@@ -159,6 +160,7 @@ local function clear_state()
   state.edit_pending = false
   state.content_start_line = 0
   state.awaiting_response_text = false
+  state.title = nil
 end
 
 ---Get full response text (excluding code header)
@@ -329,10 +331,12 @@ end
 
 ---Open the response window
 ---@param code_header string The formatted code to show at top
+---@param opts {title: string}|nil Optional conversation title
 ---@return boolean success
-function M.open(code_header)
+function M.open(code_header, opts)
   -- Clear any previous response window and buffer before opening a fresh one
   clear_state()
+  state.title = opts and opts.title or nil
 
   -- Create buffer
   state.bufnr = vim.api.nvim_create_buf(false, true)
@@ -461,6 +465,33 @@ function M.append_token(token)
   if state.winid and vim.api.nvim_win_is_valid(state.winid) then
     local new_line_count = vim.api.nvim_buf_line_count(state.bufnr)
     vim.api.nvim_win_set_cursor(state.winid, { new_line_count, 0 })
+  end
+end
+
+---Replace the current turn's reply with an updated external snapshot.
+---Preserves the header and all earlier turns, including their answers.
+---@param text string
+function M.set_response_text(text)
+  vim.validate({ text = { text, "string" } })
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return
+  end
+  local lines = vim.split(text, "\n", { plain = true })
+  local previous = state.content_start_line > 0
+      and vim.api.nvim_buf_get_lines(
+        state.bufnr,
+        state.content_start_line - 1,
+        state.content_start_line,
+        false
+      )[1]
+    or ""
+  if not is_blank_line(previous) then
+    table.insert(lines, 1, "")
+  end
+  vim.api.nvim_buf_set_lines(state.bufnr, state.content_start_line, -1, false, lines)
+  state.awaiting_response_text = false
+  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+    vim.api.nvim_win_set_cursor(state.winid, { vim.api.nvim_buf_line_count(state.bufnr), 0 })
   end
 end
 

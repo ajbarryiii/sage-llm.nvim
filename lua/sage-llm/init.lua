@@ -431,6 +431,16 @@ function M.ask()
   end
 end
 
+---Ask a T3 Code thread about the current visual selection.
+function M.t3_ask()
+  require("sage-llm.t3").ask()
+end
+
+---Select the T3 Code thread that receives Sage questions.
+function M.t3_select_thread()
+  require("sage-llm.t3").select_thread()
+end
+
 ---Explain the current visual selection
 ---Uses predefined "explain" action
 function M.explain()
@@ -487,6 +497,10 @@ end
 ---Ask a follow-up question about the current conversation
 ---Opens the input window for the user to type a follow-up
 function M.followup()
+  if conversation.get_backend and conversation.get_backend() == "t3" then
+    require("sage-llm.t3").followup()
+    return
+  end
   if not conversation.is_active() then
     vim.notify("sage-llm: No active conversation", vim.log.levels.WARN)
     return

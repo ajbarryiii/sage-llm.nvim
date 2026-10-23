@@ -11,20 +11,30 @@ local M = {}
 ---@field messages table[] Array of {role, content} message tables
 ---@field active boolean Whether a conversation is in progress
 ---@field current_response string Accumulates tokens for the current streaming response
+---@field backend string Backend responsible for follow-up questions
 
 ---@type SageConversationState
 local state = {
   messages = {},
   active = false,
   current_response = "\n",
+  backend = "api",
 }
 
 ---Start a new conversation with initial messages
 ---@param messages table[] Initial messages array (system + first user message)
-function M.start(messages)
+---@param opts {backend: string}|nil
+function M.start(messages, opts)
   state.messages = vim.deepcopy(messages)
   state.active = true
   state.current_response = "\n"
+  state.backend = opts and opts.backend or "api"
+end
+
+---Get the backend that owns the active conversation.
+---@return string
+function M.get_backend()
+  return state.backend
 end
 
 ---Accumulate a token from the streaming response
@@ -96,6 +106,7 @@ function M.reset()
   state.messages = {}
   state.active = false
   state.current_response = "\n"
+  state.backend = "api"
 end
 
 return M
