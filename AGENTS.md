@@ -161,17 +161,17 @@ Question: {user_question}
   
   detect_dependencies = false,                -- Toggle with :SageDepsOn/Off
   
-  models = {                                  -- OpenRouter IDs verified 2026-09-10
+  models = {                                  -- OpenRouter IDs verified 2026-11-20
     "openai/gpt-oss-20b",
-    "inception/mercury-2.5",
-    "inception/mercury-2",
-    "google/gemini-3.8-flash",
-    "openai/gpt-5.6-luna",
+    "z-ai/glm-5.3-flash",
+    "minimax/minimax-m3.1-flash",
+    "openai/gpt-6-luna",
+    "anthropic/claude-haiku-5.5",
     "qwen/qwen3.8-flash",
-    "deepseek/deepseek-v4.1-flash",
-    "anthropic/claude-sonnet-5",
-    "openai/gpt-6-astra",
-    "anthropic/claude-fable-5.1",
+    "deepseek/deepseek-v4.1-flash-1017",
+    "google/gemini-3.8-flash",
+    "openai/gpt-6.2-astra",
+    "anthropic/claude-fable-5.2",
   },
   
   system_prompt = [[...]],                    -- Tuned for concise teaching
