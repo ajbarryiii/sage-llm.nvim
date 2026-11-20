@@ -170,8 +170,8 @@ Question: {user_question}
     "qwen/qwen3.8-flash",
     "deepseek/deepseek-v4.1-flash-1017",
     "google/gemini-3.8-flash",
-    "openai/gpt-6.2-astra",
-    "anthropic/claude-fable-5.2",
+    "openai/gpt-6.2-sol",
+    "anthropic/claude-opus-5.5",
   },
   
   system_prompt = [[...]],                    -- Tuned for concise teaching

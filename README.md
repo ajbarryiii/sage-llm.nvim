@@ -327,9 +327,9 @@ require("sage-llm").setup({
     "qwen/qwen3.8-flash",
     "deepseek/deepseek-v4.1-flash-1017",
     "google/gemini-3.8-flash",
-    -- Flagships for difficult questions
-    "openai/gpt-6.2-astra",
-    "anthropic/claude-fable-5.2",
+    -- Stronger OpenAI and Anthropic models for difficult questions
+    "openai/gpt-6.2-sol",
+    "anthropic/claude-opus-5.5",
   },
   
   -- System prompt (tuned for concise teaching)
@@ -387,7 +387,7 @@ Notes:
 
 Default: `openai/gpt-oss-20b` (an inexpensive starting point).
 
-The built-in picker leans on fast, inexpensive models for everyday questions and keeps one OpenAI and one Anthropic flagship for harder problems. All ten IDs were checked against OpenRouter's [live model catalog](https://openrouter.ai/api/v1/models) and their provider endpoints on **2026-11-20**: each accepts text, returns text, has an active endpoint, and has no announced expiration in the catalog. Each one also answered a short streamed request through the plugin's API client.
+The built-in picker leans on fast, inexpensive models for everyday questions and keeps a stronger OpenAI model and Anthropic model for harder problems. All ten IDs were checked against OpenRouter's [live model catalog](https://openrouter.ai/api/v1/models) and their provider endpoints on **2026-11-20**: each accepts text, returns text, has an active endpoint, and has no announced expiration in the catalog. Each one also answered a short streamed request through the plugin's API client.
 
 Prices below are the catalog's USD rates per **1 million tokens**, before caching or additional services. They are a dated comparison, not fixed prices; provider routing, promotions, and long-context or time-of-day rates can change the bill. Context is the catalog maximum and can vary by provider.
 
@@ -401,12 +401,12 @@ Prices below are the catalog's USD rates per **1 million tokens**, before cachin
 | [Qwen3.8 Flash](https://openrouter.ai/qwen/qwen3.8-flash) — `qwen/qwen3.8-flash` | Low-cost coding and codebase analysis | $0.15 / $0.47 | 1M |
 | [DeepSeek V4.1 Flash 1017](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017) — `deepseek/deepseek-v4.1-flash-1017` | Latest DeepSeek Flash snapshot with inexpensive reasoning | $0.15 / $0.60 (off-peak) | 1.05M |
 | [Gemini 3.8 Flash](https://openrouter.ai/google/gemini-3.8-flash) — `google/gemini-3.8-flash` | Google's strongest Flash model for coding and reasoning | $0.825 / $4.125 | 1.05M |
-| [GPT-6.2 Astra](https://openrouter.ai/openai/gpt-6.2-astra) — `openai/gpt-6.2-astra` | OpenAI flagship for the hardest engineering questions | $8 / $40 | 1.05M |
-| [Claude Fable 5.2](https://openrouter.ai/anthropic/claude-fable-5.2) — `anthropic/claude-fable-5.2` | Anthropic flagship for demanding coding and reasoning | $8 / $40 | 1M |
+| [GPT-6.2 Sol](https://openrouter.ai/openai/gpt-6.2-sol) — `openai/gpt-6.2-sol` | Capable everyday OpenAI model, one tier below Astra | $2 / $10 | 1.05M |
+| [Claude Opus 5.5](https://openrouter.ai/anthropic/claude-opus-5.5) — `anthropic/claude-opus-5.5` | Anthropic model for demanding reasoning and coding, one tier below Fable | $4 / $20 | 1M |
 
 GLM 5.3 Flash's price is its cheapest provider; most providers, including Z.AI, charge about $0.15 / $0.50. MiniMax charges $0.15 / $0.60 from 01:00 to 15:00 UTC. DeepSeek's direct endpoint charges $0.30 / $1.20 during weekday peak hours. Some Gemini, OpenAI, and Anthropic endpoints list higher-priced tiers. Check the linked provider listings for current terms.
 
-For interactive use, start with GLM 5.3 Flash, MiniMax M3.1 Flash, DeepSeek V4.1 Flash, or Claude Haiku 5.5, which had the quickest first tokens in a one-off check; pick a flagship for a difficult explanation. These are selection guidelines based on the model descriptions, pricing, and a single short request per model, not plugin-specific benchmarks. Actual speed depends on the provider, load, and reasoning effort. The list uses regular text-generation IDs rather than batch, image-generation, or free variants.
+For interactive use, start with GLM 5.3 Flash, MiniMax M3.1 Flash, DeepSeek V4.1 Flash, or Claude Haiku 5.5, which had the quickest first tokens in a one-off check; pick GPT-6.2 Sol or Claude Opus 5.5 for a difficult explanation. These are selection guidelines based on the model descriptions, pricing, and a single short request per model, not plugin-specific benchmarks. Actual speed depends on the provider, load, and reasoning effort. The list uses regular text-generation IDs rather than batch, image-generation, or free variants.
 
 Switch models with `:SageModel` or configure in `setup()`:
 
